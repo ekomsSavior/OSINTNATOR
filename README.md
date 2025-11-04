@@ -12,7 +12,7 @@ open source osint framework
   Expect the GUI, banner, tabs, and default engine = DuckDuckGo.
 * **Dry-run username pack**
 
-  * Put a test username (e.g., `toothpaste.botz`) → select “Specialized / Extra → Username Pack (direct)” → Run.
+  * Put a test username (e.g., `me0w.me0w`) → select “Specialized / Extra → Username Pack (direct)” → Run.
   * Expect several “found / not found” rows plus links.
 * **Report files created**
 
