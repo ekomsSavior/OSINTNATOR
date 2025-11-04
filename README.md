@@ -110,7 +110,7 @@ open source osint framework
   ```bash
   python - <<'PY'
   ```
-
+```bash
 import importlib, scrapers
 importlib.reload(scrapers)
 print("REGISTERED:", ", ".join(sorted(scrapers.SCRAPERS.keys())))
@@ -118,7 +118,9 @@ PY
 
 ````
 Ensure all the sites you expect appear in the list.
+
 - **Network probe**
+  
 ```bash
 python - <<'PY'
 import scrapers
@@ -135,25 +137,33 @@ Confirms outbound HTTP works and tool chain is intact.
   ```bash
   OSINTNATOR_REMOTE_RENDER=1 python - <<'PY'
   ```
-
+```bash
 import scrapers
 s = scrapers.get_session_for_tests()
 print("Render enabled:", bool(scrapers._maybe_rendered_copy("[https://httpbin.org/html](https://httpbin.org/html)")))
 PY
 
 ````
+---
 
 # Interpreting zero-hit runs
+
 - Sites change HTML/routes often. “0 hits” can be legit (no profile) *or* a subtle layout change.
+- 
 - Use the UI’s **(open site)** and **(search dork)** links the app adds automatically for manual confirmation.
+
 - For JS-heavy or CF-guarded sites, try:
 1) `pip install cloudscraper`
 2) `export OSINTNATOR_REMOTE_RENDER=1`
 3) Increase Timeout to ~15s.
 4) Reduce Threads to avoid bursts.
 
+---
+
 # Output & exports
+
 - **CSV/JSON**: click “Save CSV+JSON” or rely on auto-save after run.
+
 - **What’s inside**
 - `OSINTHit`: `site`, `title`, `snippet` (first ~200–300 chars of page), `url`, and a `raw` dict with flags like `exists`, `code`, `fallback`, `probed`.
 
@@ -186,9 +196,11 @@ PY
 * **403/Just a moment…** → CF page; use `cloudscraper` and/or `OSINTNATOR_REMOTE_RENDER=1`.
 * **GUI text unreadable** → Toggle Dark; if you themed locally, confirm `TCombobox`/`TEntry` foreground & fieldbackground are set (we set them for both themes).
 
+---
+
 # Etiquette & legal
 
 * Respect each site’s **ToS/robots**; throttle via Threads/Timeout.
 * Don’t store or republish sensitive data beyond permissible use.
-* HIBP is rate-limited and requires an API key tied to an account.
+* Only use for research and searchs you have permission to preform.
 
