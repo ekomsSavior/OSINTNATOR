@@ -9,10 +9,11 @@ from urllib.parse import quote_plus
 import concurrent.futures
 import threading
 
+import datasets as DATASETS
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-# keep all scraping logic in scrapers.py
 import scrapers as PLUG
 
 APP_NAME = "Osintnator"
@@ -163,16 +164,50 @@ def site_base_url(site: str) -> str | None:
     dom = SITE_DOMAIN.get(site); return f"https://{dom}" if dom else None
 
 def dork_url(site_label: str, q: OSINTQuery, engine: str) -> str:
+    """
+    Build a site-specific dork. For property sites prefer address tokens;
+    for reverse-phone sites prefer phone tokens; otherwise use name/username/email.
+    """
     domain = SITE_DOMAIN.get(site_label)
     toks = []
-    if q.full_name: toks.append(f"\"{q.full_name}\"")
-    if q.username:  toks.append(q.username)
-    if q.email:     toks.append(q.email)
-    if q.phone:     toks.append(digits_only(q.phone))
-    if q.address1:  toks.append(f"\"{q.address1}\"")
-    if q.city:      toks.append(q.city)
-    if q.state:     toks.append(q.state)
-    if q.zip:       toks.append(q.zip)
+
+    # helpers to check membership quickly
+    prop_sites = set(CATS.get("Property Records & Accessor", []))
+    rev_sites  = set(CATS.get("Reverse Phone / Address", []))
+
+    # Property sites: prefer address -> name -> phone -> email -> username
+    if site_label in prop_sites:
+        if q.address1: toks.append(f"\"{q.address1}\"")
+        if q.city:     toks.append(q.city)
+        if q.state:    toks.append(q.state)
+        if q.zip:      toks.append(q.zip)
+        if q.full_name: toks.append(f"\"{q.full_name}\"")
+        if q.phone:    toks.append(digits_only(q.phone))
+        if q.email:    toks.append(q.email)
+        if q.username: toks.append(q.username)
+
+    # Reverse phone/address sites: prefer phone -> name -> address -> email
+    elif site_label in rev_sites:
+        if q.phone:    toks.append(digits_only(q.phone))
+        if q.full_name: toks.append(f"\"{q.full_name}\"")
+        if q.address1: toks.append(f"\"{q.address1}\"")
+        if q.city:     toks.append(q.city)
+        if q.state:    toks.append(q.state)
+        if q.zip:      toks.append(q.zip)
+        if q.email:    toks.append(q.email)
+        if q.username: toks.append(q.username)
+
+    # Default: name, username, email, phone, address
+    else:
+        if q.full_name: toks.append(f"\"{q.full_name}\"")
+        if q.username:  toks.append(q.username)
+        if q.email:     toks.append(q.email)
+        if q.phone:     toks.append(digits_only(q.phone))
+        if q.address1:  toks.append(f"\"{q.address1}\"")
+        if q.city:      toks.append(q.city)
+        if q.state:     toks.append(q.state)
+        if q.zip:       toks.append(q.zip)
+
     parts = []
     if domain: parts.append(f"site:{domain}")
     parts.extend(toks)
@@ -184,6 +219,7 @@ def cache_key_for_query(q: OSINTQuery) -> str:
     payload = json.dumps(q.to_ordered_dict(), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+# NEW helper: canonical cache path
 def cache_path_for_query(q: OSINTQuery) -> str:
     return os.path.join(CACHE_DIR, f"{cache_key_for_query(q)}.json")
 
@@ -193,8 +229,7 @@ def load_cache(q: OSINTQuery) -> List[OSINTHit]:
     try:
         with open(path, "r", encoding="utf-8") as f: data = json.load(f)
         return [OSINTHit(**h) for h in data]
-    except Exception:
-        return []
+    except Exception: return []
 
 def save_cache(q: OSINTQuery, hits: List[OSINTHit]) -> str:
     path = cache_path_for_query(q)
@@ -202,9 +237,9 @@ def save_cache(q: OSINTQuery, hits: List[OSINTHit]) -> str:
         with open(path, "w", encoding="utf-8") as f:
             json.dump([asdict(h) for h in hits], f, ensure_ascii=False, indent=2)
         return path
-    except Exception:
-        return ""
+    except Exception: return ""
 
+# NEW helper: clear cache file for a specific query
 def clear_cache_for_query(q: OSINTQuery) -> bool:
     p = cache_path_for_query(q)
     try:
@@ -547,11 +582,13 @@ class App(tk.Tk):
         return e if e in ENGINES else "DuckDuckGo"
 
     def _run_sites(self, sites: List[str], skip_cache: bool = False):
+        # fire-and-forget background runner
         t = threading.Thread(target=self._background_run, args=(sites, skip_cache), daemon=True); t.start()
 
     def _background_run(self, sites: List[str], skip_cache: bool):
         q = self._collect_query()
 
+        # if skip cache is False, try load and return cached hits immediately
         if not skip_cache:
             cache_hits = load_cache(q)
             if cache_hits:
@@ -578,10 +615,147 @@ class App(tk.Tk):
         ordered_sites = prioritized + remaining
 
         results: List[OSINTHit] = []
+
+        # --- NEW: run public dataset checks first, per-site with tailored payloads ---
+        sites_to_scrape = list(ordered_sites)  # default: scrape everything
+        self.ui_queue.put(("note", "Running public dataset lookups first..."))
+
+        # build quick sets for categorization
+        prop_sites = set(CATS.get("Property Records & Accessor", []))
+        rev_sites = set(CATS.get("Reverse Phone / Address", []))
+
+        satisfied_sites = set()
+        results_from_datasets = []
+
+        # Build token set from the GUI inputs (only tokens we care about)
+        token_candidates = []
+        if q.full_name:
+            # include the full name and also first/last separately
+            token_candidates.append(q.full_name.lower())
+            if q.first: token_candidates.append(q.first.lower())
+            if q.last: token_candidates.append(q.last.lower())
+        if q.username: token_candidates.append(q.username.lower())
+        if q.email: token_candidates.append(q.email.lower())
+        if q.phone:
+            p_digits = digits_only(q.phone)
+            if p_digits: token_candidates.append(p_digits)
+        if q.address1: token_candidates.append(q.address1.lower())
+        if q.city: token_candidates.append(q.city.lower())
+        if q.state: token_candidates.append(q.state.lower())
+        if q.zip: token_candidates.append(q.zip.lower())
+
+        # dedupe tokens
+        tokens = [t for i, t in enumerate(token_candidates) if t and t not in token_candidates[:i]]
+        # safety: if there are no tokens at all, don't call datasets (no user inputs)
+        call_datasets = len(tokens) > 0
+
+        # Query each site with a tailored payload (address-first for property sites, etc.)
+        for s in ordered_sites:
+            # Do not pass the site's domain to the datasets API — we want datasets to search only user input.
+            site_entry = {"label": s}
+
+            # build a per-site qdict tailored to the site's expected fields
+            if s in prop_sites:
+                site_qdict = {
+                    "address1": q.address1 or "",
+                    "city": q.city or "",
+                    "state": q.state or "",
+                    "zip": q.zip or "",
+                    "first": q.first or "",
+                    "last": q.last or ""
+                }
+            elif s in rev_sites:
+                site_qdict = {
+                    "phone": q.phone or "",
+                    "first": q.first or "",
+                    "last": q.last or "",
+                    "address1": q.address1 or ""
+                }
+            else:
+                site_qdict = q.to_ordered_dict()
+
+            if not call_datasets:
+                # no user input to search for — skip datasets for this run
+                self.ui_queue.put(("note", f"Skipping datasets lookup for {s} (no user tokens present)"))
+                continue
+
+            # try a single-site API if available, otherwise fallback to batch API
+            try:
+                if hasattr(DATASETS, "search_site_for_query"):
+                    ds_hits = DATASETS.search_site_for_query(site_entry, site_qdict) or []
+                else:
+                    # some implementations expect a batch call; pass the single-entry list and the qdict
+                    ds_hits = DATASETS.search_sites_for_query([site_entry], site_qdict) or []
+            except Exception as e:
+                ds_hits = []
+                self.ui_queue.put(("note", f"[!] datasets lookup failed for {s}: {str(e)[:200]}"))
+
+            # Process returned dataset hits (if any). Only accept hits that include at least one user token.
+            for dh in ds_hits:
+                # dh expected: {'site': ..., 'title':..., 'snippet':..., 'url':..., 'raw': {...}}
+                title = (dh.get("title", "") or "").lower()
+                snippet = (dh.get("snippet", "") or "").lower()
+                url = (dh.get("url", "") or "").lower()
+                raw_text = json.dumps(dh.get("raw", {}) or {}).lower()
+
+                combined = " ".join([title, snippet, url, raw_text])
+
+                # check whether any token appears in the dataset hit
+                matched = False
+                for tok in tokens:
+                    if tok and tok in combined:
+                        matched = True
+                        break
+
+                if not matched:
+                    # skip irrelevant dataset hits (e.g., crt.sh certs for the lookup site)
+                    self.ui_queue.put(("note", f"[datasets skip] {s}: hit didn't match query tokens -> {dh.get('url','')[:200]}"))
+                    continue
+
+                site_label = dh.get("site", s).split(" (")[0]
+                try:
+                    hit = OSINTHit(site_label, dh.get("title",""), dh.get("snippet",""), dh.get("url",""), dh.get("raw", {}))
+                    results_from_datasets.append(hit)
+                    self.ui_queue.put(("hit", hit))
+                    satisfied_sites.add(site_label)
+                except Exception:
+                    self.ui_queue.put(("note", f"[dataset] {dh.get('title')} -> {dh.get('url')}"))
+
+        # If datasets returned anything, remove satisfied sites from the live-scrape list
+        if satisfied_sites:
+            sites_to_scrape = [s for s in ordered_sites if s not in satisfied_sites]
+            self.ui_queue.put(("note", f"Datasets satisfied: {', '.join(sorted(list(satisfied_sites))) }"))
+        else:
+            self.ui_queue.put(("note", "No dataset hits found — will proceed to scrapers."))
+
+        # merge dataset results into main results list
+        for r in results_from_datasets:
+            results.append(r)
+
+        # If there are no sites left to scrape (datasets-only), skip the scraper pool
+        if not sites_to_scrape:
+            self.ui_queue.put(("note", "All sites satisfied by datasets — skipping live scrapers."))
+            # Save cache and reports from 'results' so UI persists findings
+            if results:
+                save_cache(q, results)
+                self.ui_queue.put(("note", f"Saved cache for this query ({len(results)} rows)"))
+            csv_path, json_path, txt_path = save_reports(results)
+            self.ui_queue.put(("note", f"Saved CSV: {csv_path}  JSON: {json_path}  TXT: {txt_path}"))
+            self.ui_queue.put(("done", len(results))); return
+
+        # --- continue with live scrapers, but only for remaining sites ---
         with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as ex:
-            future_map = {ex.submit(_run_site_with_timeout, site, q, timeout): site for site in ordered_sites}
-            for fut in concurrent.futures.as_completed(future_map):
-                site = future_map[fut]
+            # Create futures, but allow a larger timeout for Username Pack (direct)
+            future_map = {}
+            for site in sites_to_scrape:
+                site_timeout = timeout
+                if site == "Username Pack (direct)":
+                    site_timeout = max(timeout, 20)  # give username pack more breathing room
+                future = ex.submit(_run_site_with_timeout, site, q, site_timeout)
+                future_map[future] = (site, site_timeout)
+
+            for fut in concurrent.futures.as_completed(list(future_map.keys())):
+                site, used_timeout = future_map[fut]
                 try:
                     hits = fut.result()
                     if hits:
@@ -601,9 +775,9 @@ class App(tk.Tk):
                     home = site_base_url(site)
                     dork = dork_url(site, q, engine)
                     if home:
-                        h = OSINTHit(site, f"{site} (timeout→open site)", f"Timed out after {timeout}s", home, {"timeout": True, "fallback": "home"})
+                        h = OSINTHit(site, f"{site} (timeout→open site)", f"Timed out after {used_timeout}s", home, {"timeout": True, "fallback": "home"})
                         results.append(h); self.ui_queue.put(("hit", h))
-                    h = OSINTHit(site, f"{site} (timeout→dork)", f"Timed out after {timeout}s", dork, {"timeout": True, "fallback": "dork"})
+                    h = OSINTHit(site, f"{site} (timeout→dork)", f"Timed out after {used_timeout}s", dork, {"timeout": True, "fallback": "dork"})
                     results.append(h); self.ui_queue.put(("hit", h))
                     self.ui_queue.put(("note", f"[!] {site}: timeout, provided links"))
                 except Exception as e:
@@ -677,6 +851,11 @@ class App(tk.Tk):
             messagebox.showinfo("No username", "Enter a username first.")
             return
         # always skip cache for quick username lookup so user sees fresh results
+        # clear previous results and show immediate feedback so user knows it's started
+        self.results = []
+        self.txt.delete("1.0", "end")
+        self.status.set(f"running username pack for @{u} (bypassing cache)...")
+        # call run_sites but force skip_cache True
         self._run_sites(["Username Pack (direct)"], skip_cache=True)
 
     def _clear_cache_current(self):
