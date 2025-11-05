@@ -1,206 +1,154 @@
 # OSINTNATOR
-open source osint framework
 
-# Quick smoke tests
-
-* **Run app**
-
-  ```bash
-  python osintnator.py
-  ```
-
-  Expect the GUI, banner, tabs, and default engine = DuckDuckGo.
-* **Dry-run username pack**
-
-  * Put a test username (e.g., `me0w.me0w`) → select “Specialized / Extra → Username Pack (direct)” → Run.
-  * Expect several “found / not found” rows plus links.
-* **Report files created**
-
-  * After a run, confirm new files:
-
-    ```
-    reports/osint_YYYY-MM-DD_HHMMSS.csv
-    reports/osint_YYYY-MM-DD_HHMMSS.json
-    reports/cache/<sha256>.json
-    ```
-  * CSV has 4 cols: site, title, snippet, url.
-
-# Debug & logs
-
-* **Verbose logging**
-
-  ```bash
-  export OSINTNATOR_DEBUG=1
-  python osintnator.py
-  ```
-
-  * Console should show `[DEBUG] scrapers: registered scraper: …`
-  * Rolling log: `logs/scrapers.log`
-* **Understand common HTTPs**
-
-  * `404` not found = likely no profile.
-  * `403` forbidden / CF shield = try `cloudscraper` or remote render (below).
-  * `405` method not allowed = HEAD blocked; code falls back to GET.
-  * `406` not acceptable = some sites (e.g., GitHub) will still return a body on GET—UI shows the URL regardless.
-
-# Options (env vars)
-
-* **Cloudflare-aware client** (auto if lib present):
-
-  * `pip install cloudscraper` (optional). The app will use it if available.
-* **Remote render for heavy JS**
-
-  ```bash
-  export OSINTNATOR_REMOTE_RENDER=1
-  ```
-
-  Uses a simple remote renderer to fetch HTML for pages that block JS-less clients.
-* **HIBP API key** (email/username breach checks):
-
-  ```bash
-  export HIBP_API_KEY="your_real_key"
-  ```
-
-  Put an email or username, select **HaveIBeenPwned**, run. No key → scraper returns empty quietly.
-
-# GUI sanity checks
-
-* **Theme & readability**
-
-  * Toggle “Dark” checkbox in header; confirm inputs/combos readable.
-* **Search engine**
-
-  * Change dropdown; run “search dork” fallbacks; links should open with that engine’s query.
-* **Resizable output area**
-
-  * Resize the window—the results Text area expands with the window.
-  * If you still want more vertical room by default: in `App._result_area()` change `height=16` → `height=24` (or higher).
-
-# Performance tuning
-
-* **Threads**
-
-  * Header “Threads” spinner controls the thread pool (`2–40`).
-    Large values = faster but more likely to trip anti-bot. Try **8–16**.
-* **Timeout**
-
-  * Header “Timeouts” (sec) per site. **8–15s** is a good range.
-* **Priorities**
-
-  * `PRIORITY_SITES` in `osintnator.py` run first; keep fast/high-value entries there.
-
-# Caching & re-runs
-
-* **Per-query cache**
-
-  * Cache key = sha256 of query fields.
-  * Delete a single cache file to force a fresh run:
-
-    ```
-    rm reports/cache/<hash>.json
-    ```
-* **Disable cache for a one-off**
-
-  * Temporarily comment the early `load_cache(q)` block in `_background_run` (or delete the cache file above).
-
-# Scraper health checks
-
-* **Registry sanity**
-
-  ```bash
-  python - <<'PY'
-  ```
-```bash
-import importlib, scrapers
-importlib.reload(scrapers)
-print("REGISTERED:", ", ".join(sorted(scrapers.SCRAPERS.keys())))
-PY
-
-````
-Ensure all the sites you expect appear in the list.
-
-- **Network probe**
-  
-```bash
-python - <<'PY'
-import scrapers
-s = scrapers.get_session_for_tests()
-r = s.get("https://example.com", timeout=8)
-print(r.status_code, len(r.text))
-PY
-````
-
-Confirms outbound HTTP works and tool chain is intact.
-
-* **Remote render quick check**
-
-  ```bash
-  OSINTNATOR_REMOTE_RENDER=1 python - <<'PY'
-  ```
-```bash
-import scrapers
-s = scrapers.get_session_for_tests()
-print("Render enabled:", bool(scrapers._maybe_rendered_copy("[https://httpbin.org/html](https://httpbin.org/html)")))
-PY
-
-````
----
-
-# Interpreting zero-hit runs
-
-- Sites change HTML/routes often. “0 hits” can be legit (no profile) *or* a subtle layout change.
-- 
-- Use the UI’s **(open site)** and **(search dork)** links the app adds automatically for manual confirmation.
-
-- For JS-heavy or CF-guarded sites, try:
-1) `pip install cloudscraper`
-2) `export OSINTNATOR_REMOTE_RENDER=1`
-3) Increase Timeout to ~15s.
-4) Reduce Threads to avoid bursts.
+Open-source OSINT framework 
+by: DA3 & ek0ms savi0r
 
 ---
 
-# Output & exports
+## Install
 
-- **CSV/JSON**: click “Save CSV+JSON” or rely on auto-save after run.
+```bash
+git clone https://github.com/ekomsSavior/OSINTNATOR.git
 
-- **What’s inside**
-- `OSINTHit`: `site`, `title`, `snippet` (first ~200–300 chars of page), `url`, and a `raw` dict with flags like `exists`, `code`, `fallback`, `probed`.
+cd OSINTNATOR
 
-# Search-dork logic (fallbacks)
-- If a scraper times out/errors or isn’t registered, the app inserts:
-- **Open site** (homepage or base path)
-- **Search dork** (engine + `site:domain` + your tokens)
-- Configure engine via the header dropdown. It’s guarded (bad key → DuckDuckGo).
+sudo apt update && sudo apt install python3-tk
 
-# Adding a new scraper (recipe)
-1. Open `scrapers.py`.
-2. Add:
- ```python
- @register("MySite")
- def scrape_mysite(sess, q):
-     if not q.username and not q.full_name and not q.email:
-         return []
-     probes = [
-         f"https://mysite.tld/search?q={quote_plus(q.username or q.full_name or q.email)}"
-     ]
-     return probe_site_for_terms(sess, "MySite", q, probes, max_hits=2)
-````
+pip3 install requests beautifulsoup4 cloudscraper urllib3
+```
 
-3. Save, restart app. It will appear under its tab (if listed in `CATS` in `osintnator.py`).
-
-# Troubleshooting quickies
-
-* **Nothing registers** → You have a duplicate filename/module shadowing `scrapers.py`. Ensure only one `scrapers.py` in your working dir.
-* **SSL errors** → Update certs (`sudo apt install ca-certificates`), or try `cloudscraper`.
-* **403/Just a moment…** → CF page; use `cloudscraper` and/or `OSINTNATOR_REMOTE_RENDER=1`.
-* **GUI text unreadable** → Toggle Dark; if you themed locally, confirm `TCombobox`/`TEntry` foreground & fieldbackground are set (we set them for both themes).
+`cloudscraper` is used automatically by the scraper session if available. See the optional Cloudflare note below. 
 
 ---
 
-# Etiquette & legal
+## Usage
 
-* Respect each site’s **ToS/robots**; throttle via Threads/Timeout.
-* Don’t store or republish sensitive data beyond permissible use.
-* Only use for research and searchs you have permission to preform.
+* Standard run:
+
+  ```bash
+  python3 osintnator.py
+  ```
+The GUI will launch. Default engine shown in the header is DuckDuckGo.
+ 
+Osintnator is most easily viewed in fullscreen mode.
+
+* Verbose / debug logging (mirrors logs to console and raises log level):
+
+```bash
+# recommended run (my default)
+export OSINTNATOR_REMOTE_RENDER=1
+export OSINTNATOR_DEBUG=1
+python3 osintnator.py
+``` 
+
+---
+
+## Important environment variables
+
+* `OSINTNATOR_REMOTE_RENDER=1`
+  Enables optional remote prerendering for JS-heavy / Cloudflare pages. The scrapers module will call a prerender service (r.jina.ai) to fetch a rendered HTML snapshot when JS-block messages are detected. Use this for pages where normal requests return JS-only content or a Cloudflare challenge. 
+
+* `OSINTNATOR_DEBUG=1`
+  Enables console log output (debug) and sets the logger to DEBUG for scrapers. Also helps when troubleshooting HTTP failures. 
+
+* `HIBP_API_KEY="..."`
+  If you want to use the HaveIBeenPwned lookup, set `HIBP_API_KEY` in your environment. The HIBP scraper will return nothing if the key is missing, so add it only if you have a valid key and accept the HIBP rate limits / ToS. 
+
+---
+
+## What engines are available (try different ones!)
+
+The UI exposes multiple search engines for fallback “dork” lookups. Experiment — different engines will return different results:
+
+* DuckDuckGo (default), Google, Brave, Bing, Yandex, Baidu, ZoomEye, DogPile. 
+
+Switch from the GUI dropdown to see how results differ. The fallback dork format uses `site:domain + tokens` and will open with the selected engine. 
+
+---
+
+## Reports & caching
+
+* After any run the app auto-saves reports under `reports/`:
+
+  ```
+  reports/osint_YYYY-MM-DD_HHMMSS.csv
+  reports/osint_YYYY-MM-DD_HHMMSS.json
+  reports/osint_YYYY-MM-DD_HHMMSS.txt
+  reports/cache/<sha256>.json
+  ```
+
+  CSV columns: `site, title, snippet, url`. Save behavior and the report paths are controlled by the `save_reports()` helpers. 
+
+* Per-query cache is a SHA256 of the query fields. Cache files live in `reports/cache/` and are returned automatically unless you bypass the cache. You can clear the cache for the current GUI query or delete the file manually:
+
+  ```bash
+  rm reports/cache/<sha256>.json
+  ```
+
+  The GUI includes a “Bypass cache” checkbox and a “Clear Cache (this query)” button for convenience.
+
+---
+
+## GUI controls & quick actions
+
+* **Engine** — choose search engine for dork fallbacks. 
+* **Threads** — controls concurrent scraper threads (2–40). Higher = faster but increases chance of anti-bot triggers. Default in UI is `16` Try **8–16**. 
+* **Timeouts** — per-site timeout (seconds). Default UI value is `12`. Increase to ~15–20 for JS/heavy sites. 
+* **Quick Username Pack** — special one-click check for usernames (`Username Pack (direct)`) that always bypasses cache and forces a fresh run for immediate feedback. Use it when you want instant username lookups. 
+
+---
+
+## Scrapers / datasets behavior (how results are produced)
+
+* The tool first tries **datasets** (Wayback, crt.sh, helpful engine search links) for each site; if datasets return results the live scrapers for those sites are skipped. This helps surface subdomains, snapshots, and certificates quickly. The datasets helpers are in `datasets.py`.
+
+* When scrapers run, the `scrapers` module prepares a session (optionally `cloudscraper`), uses polite jitter before requests, and will attempt a remote-render if the page looks like it’s JS-protected. All network helpers live in `scrapers.py`.
+
+---
+
+## Useful tweak points (where to edit)
+
+If you want to tune behavior directly in code:
+
+* `DEFAULT_TIMEOUT` in `scrapers.py` — change the default HTTP timeout for scrapers. 
+* `DEFAULT_RETRIES` in `scrapers.py` — control retry strategy for transient errors. 
+* `UA_POOL` in `scrapers.py` — expand or customize the user-agent pool used for fetches. 
+* `PRIORITY_SITES` in `osintnator.py` — keep high-value stacks here so the GUI runs these first. 
+
+---
+
+## Troubleshooting checklist
+
+* **0 hits everywhere** → try a different engine, increase `Timeouts`, reduce `Threads`, and/or enable `OSINTNATOR_REMOTE_RENDER`. The app adds “(open site)” and “(search dork)” fallback links automatically if scrapers fail.
+
+* **403 / Cloudflare / challenge pages** → install `cloudscraper` and/or set `OSINTNATOR_REMOTE_RENDER=1`. The scrapers module will auto-use `cloudscraper` when installed.
+
+* **HIBP returns nothing** → ensure `HIBP_API_KEY` is set and that you’re using a valid key. The HIBP scraper will return empty if the key is missing. 
+
+* **SSL / certificate errors** → on Debian/Ubuntu: `sudo apt install ca-certificates` and ensure Python uses a current `certifi`. Alternatively try `cloudscraper` if the issue is Cloudflare-related.
+
+* **No GUI / tkinter errors** → install system `python3-tk` package for your distribution.
+
+---
+
+## Extending the project
+
+* **Add a new scraper**: open `scrapers.py`, add a new `@register("MySite")` scraper function that returns `List[OSINTHit]`. Follow the existing `probe_site_for_terms` helpers as examples. The registration decorator exposes the site in the notebook tabs automatically. 
+
+* **Datasets**: add or refine dataset helpers in `datasets.py` — already includes Wayback and crt.sh helpers plus a utility to produce dork links. 
+
+---
+
+## Legal
+
+This tool is for lawful research and defensive use only.
+
+Respect site ToS and robots. 
+
+Throttle with Threads/Timeouts and avoid aggressive scans against 3rd-party infrastructure. 
+
+
+---
+
+
 
