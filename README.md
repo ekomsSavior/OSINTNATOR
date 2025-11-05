@@ -1,7 +1,6 @@
 # OSINTNATOR
 
-## Open-source OSINT framework 
-⌕ ⋆.˚ by: DA3 & ek0ms savi0r ⌕ ⋆.˚
+## Open-source OSINT framework ⌕ ⋆.˚ by: DA3 & ek0ms savi0r ⌕ ⋆.˚
 
 ![Screenshot_2025-11-04_17_36_53](https://github.com/user-attachments/assets/a1cc0952-5173-497a-81e5-95ec53de9c8b)
 ---
