@@ -1,7 +1,7 @@
 # OSINTNATOR
 
 Open-source OSINT framework 
-by: DA3 & ek0ms savi0r
+⌕ ⋆.˚ by: DA3 & ek0ms savi0r ⌕ ⋆.˚
 
 ![Screenshot_2025-11-04_17_36_53](https://github.com/user-attachments/assets/a1cc0952-5173-497a-81e5-95ec53de9c8b)
 ---
@@ -24,16 +24,8 @@ pip3 install requests beautifulsoup4 cloudscraper urllib3
 
 ## Usage
 
-* Standard run:
 
-  ```bash
-  python3 osintnator.py
-  ```
-The GUI will launch. Default engine shown in the header is DuckDuckGo.
- 
-Osintnator is most easily viewed in fullscreen mode.
-
-* Verbose / debug logging (mirrors logs to console and raises log level):
+* Verbose Mode (Best):
 
 ```bash
 # recommended run (my default)
@@ -41,6 +33,15 @@ export OSINTNATOR_REMOTE_RENDER=1
 export OSINTNATOR_DEBUG=1
 python3 osintnator.py
 ``` 
+The GUI will launch. Default engine shown in the header is DuckDuckGo.
+ 
+Osintnator is most easily viewed in fullscreen mode.
+
+* Standard run:
+
+  ```bash
+  python3 osintnator.py
+  ```
 
 ---
 
