@@ -3,6 +3,7 @@
 Open-source OSINT framework 
 by: DA3 & ek0ms savi0r
 
+![Screenshot_2025-11-04_17_36_53](https://github.com/user-attachments/assets/a1cc0952-5173-497a-81e5-95ec53de9c8b)
 ---
 
 ## Install
@@ -66,6 +67,19 @@ Switch from the GUI dropdown to see how results differ. The fallback dork format
 
 ---
 
+![Screenshot_2025-11-04_17_14_10](https://github.com/user-attachments/assets/226f9afa-33d3-40a2-b2a3-0ffe9bb1e4d7)
+
+
+## GUI controls & quick actions
+
+* **Engine** — choose search engine for dork fallbacks. 
+* **Threads** — controls concurrent scraper threads (2–40). Higher = faster but increases chance of anti-bot triggers. Default in UI is `16` Try **8–16**. 
+* **Timeouts** — per-site timeout (seconds). Default UI value is `12`. Increase to ~15–20 for JS/heavy sites. 
+* **Quick Username Pack** — special one-click check for usernames (`Username Pack (direct)`) that always bypasses cache and forces a fresh run for immediate feedback. Use it when you want instant username lookups. 
+* The GUI includes a “Bypass cache” checkbox and a “Clear Cache (this query)” button for convenience.
+
+---
+
 ## Reports & caching
 
 * After any run the app auto-saves reports under `reports/`:
@@ -84,19 +98,7 @@ Switch from the GUI dropdown to see how results differ. The fallback dork format
   ```bash
   rm reports/cache/<sha256>.json
   ```
-
-  The GUI includes a “Bypass cache” checkbox and a “Clear Cache (this query)” button for convenience.
-
----
-
-## GUI controls & quick actions
-
-* **Engine** — choose search engine for dork fallbacks. 
-* **Threads** — controls concurrent scraper threads (2–40). Higher = faster but increases chance of anti-bot triggers. Default in UI is `16` Try **8–16**. 
-* **Timeouts** — per-site timeout (seconds). Default UI value is `12`. Increase to ~15–20 for JS/heavy sites. 
-* **Quick Username Pack** — special one-click check for usernames (`Username Pack (direct)`) that always bypasses cache and forces a fresh run for immediate feedback. Use it when you want instant username lookups. 
-
----
+  ---
 
 ## Scrapers / datasets behavior (how results are produced)
 
