@@ -1,4 +1,4 @@
-# OSINTNATOR
+# OSINTNATOR ✩₊˚.⋆☾⋆⁺₊✧
 
 ## Open-source OSINT framework ⌕ ⋆.˚ by: DA3 & ek0ms savi0r ⌕ ⋆.˚
 
