@@ -1,0 +1,46 @@
+# Standalone installation: this proxy owns ports 80/443 on the destination host.
+# If the church server already has a proxy, use WEB-DEPLOYMENT.md instead.
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile.web
+    environment:
+      OSINTNATOR_ORIGIN: https://osint.churchofmalware.org
+      FORWARDED_ALLOW_IPS: 172.30.16.2
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    cpus: 2
+    pids_limit: 96
+    networks:
+      research:
+        ipv4_address: 172.30.16.3
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - proxy_config:/config
+    networks:
+      research:
+        ipv4_address: 172.30.16.2
+    depends_on:
+      app:
+        condition: service_healthy
+networks:
+  research:
+    ipam:
+      config:
+        - subnet: 172.30.16.0/24
+volumes:
+  certificates:
+  proxy_config:

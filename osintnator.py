@@ -9,15 +9,32 @@ from urllib.parse import quote_plus
 import concurrent.futures
 import threading
 
-import datasets as DATASETS
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 import scrapers as PLUG
+from lookup_paths import guide_for, manual_path, input_hint
+from bounded_runner import run_bounded
+from graph_export import export_graphml
+from report_html import export_html
+from settings_store import save_settings, load_settings
+import api_sources  # registers documented public API adapters
+import free_sources
+import public_web
+import web_search
+import identity_sources
+import linkedin_sources
+import property_sources
+import property_directory
+import obituary_sources
+import contact_sources
+from evidence_matching import annotate_hit
+from query_inputs import ENGINES, normalize_domain, FIELD_LABELS, search_inputs
+from research_plan import plan_lookups, coverage_plan, coverage, balanced_findings
 
 APP_NAME = "Osintnator"
-REPORTS_DIR = "reports"
+REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
 CACHE_DIR = os.path.join(REPORTS_DIR, "cache")
 os.makedirs(REPORTS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -31,130 +48,41 @@ BANNER = r"""
 
 # ===== Theme Palettes =====
 DARK = {
-    "bg":        "#1e1e1e",
-    "panel":     "#252526",
+    "bg":        "#080808",
+    "panel":     "#141414",
     "sunken":    "#2d2d2d",
     "fg":        "#e6e6e6",
-    "muted":     "#9aa0a6",
-    "accent":    "#00d1d1",
+    "muted":     "#aaaaaa",
+    "accent":    "#eeeeee",
     "entrybg":   "#2b2b2b",
     "entryfg":   "#eaeaea",
     "entrybd":   "#3a3a3a",
-    "focus":     "#007acc",
-    "tab_bg":    "#252526",
-    "tab_sel":   "#2f2f2f",
+    "focus":     "#555555",
+    "tab_bg":    "#141414",
+    "tab_sel":   "#333333",
     "pb_trough": "#2a2a2a",
-    "pb_bar":    "#00d1d1",
+    "pb_bar":    "#eeeeee",
 }
 LIGHT = {
-    "bg":        "#f5f6f7",
+    "bg":        "#f5f5f5",
     "panel":     "#ffffff",
     "sunken":    "#f0f0f0",
-    "fg":        "#202124",
-    "muted":     "#5f6368",
-    "accent":    "#0b84ff",
+    "fg":        "#202020",
+    "muted":     "#606060",
+    "accent":    "#333333",
     "entrybg":   "#ffffff",
-    "entryfg":   "#202124",
-    "entrybd":   "#d0d7de",
-    "focus":     "#0b84ff",
+    "entryfg":   "#202020",
+    "entrybd":   "#cccccc",
+    "focus":     "#333333",
     "tab_bg":    "#f0f0f0",
     "tab_sel":   "#ffffff",
-    "pb_trough": "#e9ecef",
-    "pb_bar":    "#0b84ff",
+    "pb_trough": "#eeeeee",
+    "pb_bar":    "#333333",
 }
 
-ENGINES = {
-    "DuckDuckGo": "https://duckduckgo.com/?q=",
-    "Google":     "https://www.google.com/search?q=",
-    "Brave":      "https://search.brave.com/search?q=",
-    "Bing":       "https://www.bing.com/search?q=",
-    "Yandex":     "https://yandex.com/search/?text=",
-    "Baidu":      "https://www.baidu.com/s?wd=",
-    "ZoomEye":    "https://www.zoomeye.ai/search?q=",
-    "DogPile":    "https://www.dogpile.com/serp?q=",
-}
 
-# === Catalog ===
-CATS = {
-    "People Search": [
-        "FastPeopleSearch","TruePeopleSearch","TruePeopleSearch.io","FastBackgroundCheck","That’sThem",
-        "FamilyTreeNow","ZabaSearch","Radaris","NeighborReport","Nuwber",
-    ],
-    "Reverse Phone / Address": [
-        "Whitepages (Free Search)","411.com","AnyWho","WhoCallsMe","SpyDialer",
-        "CallerName","OKCaller","Sync.me","NumLookup","ReversePhoneLookup",
-    ],
-    "Property Records & Accessor": [
-        "Zillow","Rehold","NeighborWho","HomeFacts","Melissa Address Lookup",
-        "PropertyShark","Netronline Public Records","PublicRecords360","AddressSearch.com","HOMES.com",
-    ],
-    "Court/Criminal/Gov": [
-        "PACER (federal index)","VINELink","BOP Inmate Locator","State/County Court Directory","InmateAid",
-        "State Prison Inmate Locators","Offender Search","Arrests.org","Mugshots.com","BustedMugshots",
-    ],
-    "Specialized / Extra": [
-        "PeekYou","Pipl (preview)","Social Searcher","Username Search","instant username search","IDcrawl","Username Pack (direct)","Hunter.io",
-        "EmailHippo","HaveIBeenPwned","BlackBookOnline","DataAxle Reference","USPhoneBook",
-    ],
-    "Worldwide": [
-        "SearchSystems", "GestolenObjectenRegister", "RDW-OVI", "PeopleSearch AU",
-        "QKenteken", "KVK Zoeken", "Sportradar", "Weibo", "HKU DataHub", "OpenStreetMap",
-    ],
-}
-
-# Primary domain roots (used for dork queries)
-SITE_DOMAIN = {
-    "FastPeopleSearch":"fastpeoplesearch.com","TruePeopleSearch":"truepeoplesearch.com","TruePeopleSearch.io":"truepeoplesearch.io",
-    "FastBackgroundCheck":"fastbackgroundcheck.com","That’sThem":"thatsthem.com","FamilyTreeNow":"familytreenow.com","ZabaSearch":"zabasearch.com",
-    "Radaris":"radaris.com","NeighborReport":None,"Nuwber":"nuwber.com",
-    "Whitepages (Free Search)":"whitepages.com","411.com":"411.com","AnyWho":"anywho.com","WhoCallsMe":"whocallsme.com",
-    "SpyDialer":"spydialer.com","CallerName":None,"OKCaller":"okcaller.com","Sync.me":"sync.me","NumLookup":"numlookup.com","ReversePhoneLookup":"reversephonelookup.com",
-    "Zillow":"zillow.com","Rehold":"rehold.com","NeighborWho":"neighborwho.com","HomeFacts":"homefacts.com","Melissa Address Lookup":"melissa.com",
-    "PropertyShark":"propertyshark.com","Netronline Public Records":"netronline.com","PublicRecords360":"publicrecords360.com","AddressSearch.com":"addresssearch.com","HOMES.com":"homes.com",
-    "PACER (federal index)":"pacer.uscourts.gov","VINELink":"vinelink.vineapps.com","BOP Inmate Locator":"bop.gov","State/County Court Directory":None,
-    "InmateAid":"inmateaid.com","State Prison Inmate Locators":None,"Offender Search":"nsopw.gov","Arrests.org":"arrests.org","Mugshots.com":"mugshots.com","BustedMugshots":"bustedmugshots.com",
-    "PeekYou":"peekyou.com","Pipl (preview)":"pipl.com","Social Searcher":"social-searcher.com","Username Search":"usersearch.org","instant username search":"instantusername.com",
-    "IDcrawl":"idcrawl.com/username-search","Username Pack (direct)": None,"Hunter.io":"hunter.io",
-    "EmailHippo":"emailhippo.com","HaveIBeenPwned":"haveibeenpwned.com","BlackBookOnline":"blackbookonline.info","DataAxle Reference":"referenceusa.com","USPhoneBook":"usphonebook.com",
-    "SearchSystems":"searchsystems.net","GestolenObjectenRegister":"gestolenobjectenregister.nl","RDW-OVI":"ovi.rdw.nl","PeopleSearch AU":"peoplesearch.com.au",
-    "QKenteken":"qenteken.nl","KVK Zoeken":"kvk.nl","Sportradar":"sportradar.com","Weibo":"weibo.com","HKU DataHub":"datahub.hku.hk","OpenStreetMap":"openstreetmap.org",
-}
-
-SITE_URL = {
-    "SearchSystems": "https://publicrecords.searchsystems.net/",
-    "GestolenObjectenRegister": "https://gestolenobjectenregister.nl/",
-    "RDW-OVI": "https://ovi.rdw.nl/",
-    "PeopleSearch AU": "https://peoplesearch.com.au/",
-    "QKenteken": "https://www.qenteken.nl/",
-    "KVK Zoeken": "https://www.kvk.nl/zoeken/",
-    "Sportradar": "https://sportradar.com/",
-    "Weibo": "https://s.weibo.com/",
-    "HKU DataHub": "https://datahub.hku.hk/",
-    "OpenStreetMap": "https://www.openstreetmap.org/",
-}
-
-PRIORITY_SITES = ["Username Pack (direct)", "FamilyTreeNow", "WhoCallsMe", "HaveIBeenPwned"]
-
-# ---------- Models ----------
-@dataclass
-class OSINTQuery:
-    first: str = ""; last: str = ""; username: str = ""; email: str = ""; phone: str = ""
-    address1: str = ""; city: str = ""; state: str = ""; zip: str = ""
-    @property
-    def full_name(self) -> str:
-        parts = [self.first.strip(), self.last.strip()]
-        return " ".join([p for p in parts if p])
-    def to_ordered_dict(self) -> Dict[str,str]:
-        return {
-            "first": self.first or "","last": self.last or "",
-            "username": self.username or "","email": self.email or "",
-            "phone": self.phone or "","address1": self.address1 or "",
-            "city": self.city or "","state": self.state or "","zip": self.zip or ""
-        }
-
-@dataclass
-class OSINTHit:
-    site: str; title: str; snippet: str; url: str; raw: Dict[str, Any]
+from source_catalog import CATS, SITE_DOMAIN, SITE_URL, PRIORITY_SITES, ENGINE_SOURCES
+from models import OSINTQuery, OSINTHit
 
 # ---------- Helpers ----------
 def digits_only(s: str) -> str: return "".join(c for c in s if c.isdigit())
@@ -164,75 +92,57 @@ def site_base_url(site: str) -> str | None:
     dom = SITE_DOMAIN.get(site); return f"https://{dom}" if dom else None
 
 def dork_url(site_label: str, q: OSINTQuery, engine: str) -> str:
-    """
-    Build a site-specific dork. For property sites prefer address tokens;
-    for reverse-phone sites prefer phone tokens; otherwise use name/username/email.
-    """
+    """One relevant identifier per query, with location only for name/address searches."""
+    if site_label=='LinkedIn Name Search':
+        return ENGINES.get(engine,ENGINES['DuckDuckGo'])+quote_plus(linkedin_sources.search_expression(q)[0])
+    if site_label=='Public Web Search' and getattr(q,'search_field',None):
+        inputs=search_inputs(q)
+        if inputs:return ENGINES.get(engine,ENGINES['DuckDuckGo'])+quote_plus(inputs[0]['query'])
     domain = SITE_DOMAIN.get(site_label)
-    toks = []
-
-    # helpers to check membership quickly
-    prop_sites = set(CATS.get("Property Records & Accessor", []))
-    rev_sites  = set(CATS.get("Reverse Phone / Address", []))
-
-    # Property sites: prefer address -> name -> phone -> email -> username
-    if site_label in prop_sites:
-        if q.address1: toks.append(f"\"{q.address1}\"")
-        if q.city:     toks.append(q.city)
-        if q.state:    toks.append(q.state)
-        if q.zip:      toks.append(q.zip)
-        if q.full_name: toks.append(f"\"{q.full_name}\"")
-        if q.phone:    toks.append(digits_only(q.phone))
-        if q.email:    toks.append(q.email)
-        if q.username: toks.append(q.username)
-
-    # Reverse phone/address sites: prefer phone -> name -> address -> email
-    elif site_label in rev_sites:
-        if q.phone:    toks.append(digits_only(q.phone))
-        if q.full_name: toks.append(f"\"{q.full_name}\"")
-        if q.address1: toks.append(f"\"{q.address1}\"")
-        if q.city:     toks.append(q.city)
-        if q.state:    toks.append(q.state)
-        if q.zip:      toks.append(q.zip)
-        if q.email:    toks.append(q.email)
-        if q.username: toks.append(q.username)
-
-    # Default: name, username, email, phone, address
+    location = False
+    if site_label in CATS.get("Property Records & Assessor", []):
+        value = q.address1 or q.full_name
+        location = True
+    elif site_label in CATS.get("Reverse Phone / Address", []):
+        value = digits_only(q.phone) or q.address1
+        location = bool(q.address1 and not q.phone)
+    elif site_label in ("Domain RDAP", "Domain DNS Records", "Website & Linked Profiles", "VirusTotal Domain (opt-in)"):
+        try: value = normalize_domain(q.domain)
+        except ValueError: value = q.domain
+    elif site_label in ("Email Domain Records", "HaveIBeenPwned", "Hunter.io", "EmailHippo"):
+        value = q.email
+    elif site_label in CATS.get("People Search", []) or site_label in CATS.get("Court/Criminal/Gov", []):
+        value = q.full_name or q.email or digits_only(q.phone)
+        location = bool(q.full_name)
     else:
-        if q.full_name: toks.append(f"\"{q.full_name}\"")
-        if q.username:  toks.append(q.username)
-        if q.email:     toks.append(q.email)
-        if q.phone:     toks.append(digits_only(q.phone))
-        if q.address1:  toks.append(f"\"{q.address1}\"")
-        if q.city:      toks.append(q.city)
-        if q.state:     toks.append(q.state)
-        if q.zip:       toks.append(q.zip)
+        value = q.username or q.full_name or q.email or q.domain
+    parts = [f'site:{domain}'] if domain else []
+    if value: parts.append('"'+value.replace('"',' ').strip()+'"')
+    if location: parts.extend(v for v in (q.city,q.state,q.zip) if v)
+    return ENGINES.get(engine,ENGINES["DuckDuckGo"]) + quote_plus(' '.join(parts) or site_label)
 
-    parts = []
-    if domain: parts.append(f"site:{domain}")
-    parts.extend(toks)
-    query_str = " ".join(parts) if parts else (domain or site_label)
-    base = ENGINES.get(engine, ENGINES["DuckDuckGo"])
-    return base + quote_plus(query_str)
 
 def cache_key_for_query(q: OSINTQuery) -> str:
-    payload = json.dumps(q.to_ordered_dict(), sort_keys=True, ensure_ascii=False)
+    payload = json.dumps({k: v.strip() for k,v in q.to_ordered_dict().items()}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 # NEW helper: canonical cache path
-def cache_path_for_query(q: OSINTQuery) -> str:
-    return os.path.join(CACHE_DIR, f"{cache_key_for_query(q)}.json")
+def cache_path_for_query(q: OSINTQuery, sites=(), engine="DuckDuckGo") -> str:
+    scope = json.dumps({"version": 8, "sites": sorted(set(sites)), "engine": engine, "search_fallback": getattr(q,"search_fallback",True)}, sort_keys=True)
+    scope_key = hashlib.sha256(scope.encode()).hexdigest()
+    return os.path.join(CACHE_DIR, f"{cache_key_for_query(q)}_{scope_key}.json")
 
-def load_cache(q: OSINTQuery) -> List[OSINTHit]:
-    path = cache_path_for_query(q)
+def load_cache(q: OSINTQuery, sites=(), engine="DuckDuckGo") -> List[OSINTHit]:
+    path = cache_path_for_query(q, sites, engine)
     if not os.path.exists(path): return []
+    if time.time() - os.path.getmtime(path) > 86400: return []
     try:
         with open(path, "r", encoding="utf-8") as f: data = json.load(f)
         return [OSINTHit(**h) for h in data]
     except Exception: return []
 
-def save_cache(q: OSINTQuery, hits: List[OSINTHit]) -> str:
-    path = cache_path_for_query(q)
+def save_cache(q: OSINTQuery, hits: List[OSINTHit], sites=(), engine="DuckDuckGo") -> str:
+    path = cache_path_for_query(q, sites, engine)
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump([asdict(h) for h in hits], f, ensure_ascii=False, indent=2)
@@ -241,14 +151,17 @@ def save_cache(q: OSINTQuery, hits: List[OSINTHit]) -> str:
 
 # NEW helper: clear cache file for a specific query
 def clear_cache_for_query(q: OSINTQuery) -> bool:
-    p = cache_path_for_query(q)
-    try:
-        if os.path.exists(p):
-            os.remove(p)
-            return True
-    except Exception:
-        pass
-    return False
+    import glob
+    prefix = os.path.join(CACHE_DIR, cache_key_for_query(q))
+    removed = False
+    for path in glob.glob(prefix + "_*.json") + [prefix + ".json"]:
+        try:
+            os.remove(path)
+            removed = True
+        except OSError:
+            pass
+    return removed
+
 
 def _report_paths(ts: str) -> Tuple[str, str, str]:
     return (
@@ -258,12 +171,15 @@ def _report_paths(ts: str) -> Tuple[str, str, str]:
     )
 
 def save_reports(hits: List[OSINTHit]) -> Tuple[str, str, str]:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S_%f")
     csv_path, json_path, txt_path = _report_paths(ts)
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f); w.writerow(["site","title","snippet","url"])
-        for h in hits: w.writerow([h.site, h.title, h.snippet, h.url])
+        w = csv.writer(f); w.writerow(["site","title","snippet","url","status","checked_at","source","source_url","relationship","entity_type","entity_value","content_sha256","evidence_file","input_fields","context_fields","engine","requested_engine","matched_inputs"])
+        for h in hits:
+            w.writerow([h.site, h.title, h.snippet, h.url, h.raw.get("kind", "candidate"), h.raw.get("checked_at", ""), h.raw.get("source", h.site)] +
+                       [h.raw.get(key,"") for key in ("source_url","relationship","entity_type","entity_value","content_sha256","evidence_file")] +
+                       [", ".join(h.raw.get("input_fields",[])), ", ".join(h.raw.get("context_fields",[])), h.raw.get("engine",""), h.raw.get("requested_engine",""), ", ".join(h.raw.get('matched_inputs',[]))])
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump([asdict(h) for h in hits], f, ensure_ascii=False, indent=2)
@@ -273,20 +189,33 @@ def save_reports(hits: List[OSINTHit]) -> Tuple[str, str, str]:
         f.write("="*72 + "\n")
         if not hits: f.write("(no results)\n")
         for i, h in enumerate(hits, 1):
-            f.write(f"[{i}] {h.site}\nTitle:   {h.title}\nURL:     {h.url}\n")
+            f.write(f"[{i}] {h.site}\nStatus:  {h.raw.get('kind', 'candidate')}\nTitle:   {h.title}\nURL:     {h.url}\n")
             snip = (h.snippet or "").replace("\n", " ").strip()
             f.write(f"Snippet: {snip}\n" + "-"*72 + "\n")
+    export_html(hits,os.path.splitext(json_path)[0]+'.html')
     return csv_path, json_path, txt_path
 
-def _run_site_with_timeout(site: str, q: OSINTQuery, timeout: int) -> List[OSINTHit]:
-    sess = PLUG.get_session()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as tmp_ex:
-        fut = tmp_ex.submit(PLUG.run_scraper, sess, site, q)
-        try:
-            hits = fut.result(timeout=timeout); return hits or []
-        except concurrent.futures.TimeoutError: raise
-        except NotImplementedError: return []
-        except Exception: return []
+def _run_site_with_timeout(site, q, timeout, cancel=None):
+    if cancel is not None and cancel.is_set():
+        return [manual_path(site, q, SITE_DOMAIN, SITE_URL, CATS, "cancelled")]
+    missing = input_hint(site, q, CATS)
+    if missing:
+        return [manual_path(site, q, SITE_DOMAIN, SITE_URL, CATS, "needs_input", missing)]
+    guide = guide_for(site)
+    if guide or site not in PLUG.SCRAPERS:
+        return [manual_path(site, q, SITE_DOMAIN, SITE_URL, CATS)]
+    outcome = run_bounded(site, q, timeout, cancel)
+    hits = outcome.hits
+    if site == "Username Pack (direct)":
+        checked = {h.url for h in hits}
+        hits.extend(h for h in PLUG.username_paths(q) if h.url not in checked)
+    if not hits or outcome.status != "complete":
+        hits.append(manual_path(site, q, SITE_DOMAIN, SITE_URL, CATS,
+                                outcome.status if outcome.status != "complete" else "manual", outcome.error))
+    for hit in hits:
+        hit.raw.setdefault("checked_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        hit.raw.setdefault("source", site)
+    return hits
 
 # ---------- GUI ----------
 class App(tk.Tk):
@@ -294,14 +223,25 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP_NAME); self.geometry("1200x900")
         self.engine_var = tk.StringVar(value="DuckDuckGo")
-        self.threads_var = tk.IntVar(value=16)
-        self.timeout_var = tk.IntVar(value=12)
+        self.threads_var = tk.IntVar(value=6)
+        self.timeout_var = tk.IntVar(value=30)
         self.category_vars: Dict[str, Dict[str, tk.BooleanVar]] = {}
         self.results: List[OSINTHit] = []
         self.ui_queue = queue.Queue()
+        self._running = False
+        self.cancel_event = threading.Event()
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.filter_var = tk.StringVar()
+        self.kind_var = tk.StringVar(value="Findings")
+        self.input_filter_var = tk.StringVar(value="All inputs")
+        self.fallback_var = tk.BooleanVar(value=True)
+        self.coverage_plan = {}
+        self.coverage_var = tk.StringVar(value="Input coverage appears here when a search starts.")
+        self.source_canvases=[]
         self._font_size = 10  # results font size
 
         self._header()
+        self._footer()
 
         # ===== RESIZABLE LAYOUT (draggable sash) =====
         self.pw = ttk.Panedwindow(self, orient="vertical")
@@ -317,10 +257,13 @@ class App(tk.Tk):
         self._inputs(self.top_pane)
         self._tabs(self.top_pane)
         self._result_area(self.bottom_pane)
-        self._footer()
 
         self._apply_theme(True)
-        self.after(200, self._process_ui_queue)
+        self.minsize(1100, 800)
+        self._sash_after_id = self.after_idle(lambda: self.pw.sashpos(0, min(500,max(300,self.pw.winfo_height()-190))))
+        self.pw.bind("<Configure>",self._keep_results_visible)
+        self.pw.bind("<ButtonRelease-1>",lambda event:self.after_idle(self._reset_pane_bounds))
+        self._queue_after_id = self.after(200, self._process_ui_queue)
 
         # allow Ctrl/Cmd + / - to zoom results text
         self.bind_all("<Control-plus>", lambda e: self._bump_font(1))
@@ -330,35 +273,32 @@ class App(tk.Tk):
 
     # UI bits
     def _header(self):
-        bar = ttk.Frame(self); bar.pack(fill="x", padx=10, pady=(10,6))
-        ttk.Label(bar, text=APP_NAME, font=("Courier New", 18, "bold")).pack(side="left")
-        right = ttk.Frame(bar); right.pack(side="right")
+        title = ttk.Frame(self); title.pack(fill="x", padx=14, pady=(12,6))
+        ttk.Label(title, text="OSINTNATOR", font=("TkDefaultFont", 18, "bold")).pack(side="left")
+        ttk.Label(title, text="Public sources / direct lookups / research paths").pack(side="left", padx=16)
+        ttk.Button(title, text="Load settings", command=self._load_settings).pack(side="right", padx=6)
+        ttk.Button(title, text="Save settings", command=self._save_settings).pack(side="right")
+        ttk.Button(title, text="Max results", command=self._maximize_results).pack(side="right")
         self.dark_var = tk.BooleanVar(value=True)
-
-        # NEW: bypass cache flag
         self.bypass_cache_var = tk.BooleanVar(value=False)
-
-        ttk.Button(right, text="Max Results", command=self._maximize_results).pack(side="right", padx=(8,0))
-        ttk.Button(right, text="Quick Username Pack", command=self._quick_username_pack).pack(side="right", padx=(8,0))
-        ttk.Checkbutton(right, text="Dark", variable=self.dark_var, command=self._toggle_dark).pack(side="right", padx=(8,0))
-
-        # NEW: Bypass cache toggle and clear cache button
-        ttk.Checkbutton(right, text="Bypass cache", variable=self.bypass_cache_var).pack(side="right", padx=(8,0))
-        ttk.Button(right, text="Clear Cache (this query)", command=self._clear_cache_current).pack(side="right", padx=(8,0))
-
-        ttk.Label(right, text="Engine:").pack(side="left")
-        ttk.Combobox(right, textvariable=self.engine_var, values=list(ENGINES.keys()), state="readonly", width=14).pack(side="left", padx=(6,0))
-        ttk.Label(right, text="Threads:").pack(side="left", padx=(10,0))
-        ttk.Spinbox(right, from_=2, to=40, textvariable=self.threads_var, width=4).pack(side="left")
-        ttk.Label(right, text="Timeouts:").pack(side="left", padx=(10,0))
-        ttk.Spinbox(right, from_=3, to=60, textvariable=self.timeout_var, width=4).pack(side="left")
+        controls = ttk.Frame(self); controls.pack(fill="x", padx=14, pady=(0,10))
+        ttk.Label(controls, text="Search engine").pack(side="left")
+        ttk.Combobox(controls, textvariable=self.engine_var, values=list(ENGINES), state="readonly", width=12).pack(side="left", padx=6)
+        ttk.Label(controls, text="Workers").pack(side="left", padx=(8,4))
+        ttk.Spinbox(controls, from_=2, to=12, textvariable=self.threads_var, width=4).pack(side="left")
+        ttk.Label(controls, text="Lookup budget (s)").pack(side="left", padx=(8,4))
+        ttk.Spinbox(controls, from_=3, to=60, textvariable=self.timeout_var, width=4).pack(side="left")
+        ttk.Checkbutton(controls, text="Dark", variable=self.dark_var, command=self._toggle_dark).pack(side="left", padx=8)
+        ttk.Checkbutton(controls, text="Bypass cache", variable=self.bypass_cache_var).pack(side="left")
+        ttk.Button(controls, text="Clear cache", command=self._clear_cache_current).pack(side="left", padx=8)
+        ttk.Button(controls, text="Username pack", command=self._quick_username_pack).pack(side="right")
 
     def _banner(self, parent):
         frame = ttk.Frame(parent); frame.pack(fill="x", pady=(0,6))
-        self.banner_txt = tk.Text(frame, height=5, bd=0, highlightthickness=0)
+        self.banner_txt = tk.Text(frame, height=1, bd=0, highlightthickness=0)
         self.banner_txt.pack(fill="x")
-        self.banner_txt.insert("1.0", BANNER)
-        self.banner_txt.configure(state="disabled", font=("Courier New", 10, "bold"))
+        self.banner_txt.insert("1.0", "RECORD = returned data    CANDIDATE = review needed    MANUAL = open source    NEEDS INPUT = add details")
+        self.banner_txt.configure(state="disabled", font=("TkDefaultFont", 9))
 
     def _inputs(self, parent):
         g = ttk.Frame(parent); g.pack(fill="x", pady=4)
@@ -372,6 +312,8 @@ class App(tk.Tk):
         self.var_state  = tk.StringVar(); self._field(g,2,1,"State",self.var_state)
         self.var_zip    = tk.StringVar(); self._field(g,2,2,"ZIP",self.var_zip)
 
+        self.var_domain = tk.StringVar(); self._field(g,3,0,"Domain / website URL",self.var_domain,40)
+
     def _field(self, parent, r, c, label, var, width=28):
         f = ttk.Frame(parent); f.grid(row=r, column=c, padx=6, pady=4, sticky="ew")
         ttk.Label(f, text=label).pack(anchor="w"); ttk.Entry(f, textvariable=var, width=width).pack(fill="x")
@@ -382,52 +324,79 @@ class App(tk.Tk):
         for cat, sites in CATS.items():
             tab = ttk.Frame(nb); nb.add(tab, text=cat)
             self._cat_tab(tab, cat, sites)
+            if cat == "Free Research":
+                nb.select(tab)
 
     def _cat_tab(self, parent, cat, sites):
-        bar = ttk.Frame(parent); bar.pack(fill="x", pady=(8,4))
+        bar = ttk.Frame(parent); bar.pack(fill="x", pady=(6,2))
         ttk.Button(bar, text="Select all", command=lambda c=cat: self._select_all(c, True)).pack(side="left")
         ttk.Button(bar, text="Clear", command=lambda c=cat: self._select_all(c, False)).pack(side="left", padx=(6,0))
+        if cat=="Free Research":
+            ttk.Checkbutton(bar,text="Try other engines if unavailable",variable=self.fallback_var).pack(side="left",padx=12)
         ttk.Button(bar, text=f"Run selected ({cat})", command=lambda c=cat: self._run_category(c)).pack(side="right")
 
         self.category_vars[cat] = {}
-        cols = ttk.Frame(parent); cols.pack(fill="both", expand=True)
+        scrollbox=ttk.Frame(parent);scrollbox.pack(fill="both",expand=True)
+        canvas=tk.Canvas(scrollbox,highlightthickness=0,height=150)
+        scrollbar=ttk.Scrollbar(scrollbox,orient='vertical',command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
+        self.source_canvases.append(canvas)
+        cols=ttk.Frame(canvas);window=canvas.create_window((0,0),window=cols,anchor='nw')
+        cols.bind('<Configure>',lambda event,c=canvas:c.configure(scrollregion=c.bbox('all')))
+        canvas.bind('<Configure>',lambda event,c=canvas,w=window:c.itemconfigure(w,width=event.width))
         left = ttk.Frame(cols); left.pack(side="left", fill="both", expand=True, padx=(0,8))
         right= ttk.Frame(cols); right.pack(side="left", fill="both", expand=True)
         half = (len(sites)+1)//2
         for i, site in enumerate(sites):
-            default_sel = (i < 6) or (site == "Username Pack (direct)")
+            default_sel = (site in ("Public Web Search","LinkedIn Name Search","GitHub Public Discovery","Gravatar Email Profile","GitHub Email Commits","Official Property Records","US Address Geography","GitHub Profile API", "Bluesky Profile API", "Domain RDAP", "Username Pack (direct)"))
             var = tk.BooleanVar(value=default_sel)
-            ttk.Checkbutton(left if i<half else right, text=site, variable=var).pack(anchor="w", pady=2)
+            button=ttk.Checkbutton(left if i<half else right, text=site + (" (manual guide)" if guide_for(site) or site not in PLUG.SCRAPERS else ""), variable=var)
+            button.pack(anchor="w",pady=1)
+            button.bind('<Button-4>',lambda event,c=canvas:c.yview_scroll(-1,'units'))
+            button.bind('<Button-5>',lambda event,c=canvas:c.yview_scroll(1,'units'))
             self.category_vars[cat][site] = var
 
     def _result_area(self, parent):
         # results pane is larger by default and fully resizable
+        self.progress = ttk.Progressbar(parent, orient="horizontal", mode="determinate")
+        self.progress.pack(side="bottom", fill="x")
+        self.status = tk.StringVar(value="ready")
+        self.status_lbl = ttk.Label(parent, textvariable=self.status)
+        self.status_lbl.pack(side="bottom", anchor="w", pady=4)
         box = ttk.Frame(parent); box.pack(fill="both", expand=True)
         # toolbar for the results area
         tbar = ttk.Frame(box); tbar.pack(fill="x", pady=(0,6))
-        ttk.Label(tbar, text="Results").pack(side="left")
+        ttk.Label(tbar, text="Filter results").pack(side="left")
+        ttk.Entry(tbar, textvariable=self.filter_var, width=24).pack(side="left", padx=6)
+        kinds=["Findings", "Shared evidence", "All", "record", "candidate", "context", "blocked", "unavailable", "manual", "not_found", "needs_input", "timeout", "error", "cancelled"]
+        ttk.Combobox(tbar, textvariable=self.kind_var, values=kinds, state="readonly", width=12).pack(side="left")
+        ttk.Combobox(tbar,textvariable=self.input_filter_var,values=["All inputs"]+list(FIELD_LABELS.values()),state="readonly",width=17).pack(side="left",padx=6)
+        self.input_filter_var.trace_add("write",lambda *_:self._refresh_results())
+        self.filter_var.trace_add("write", lambda *_: self._refresh_results())
+        self.kind_var.trace_add("write", lambda *_: self._refresh_results())
         ttk.Button(tbar, text="A–", command=lambda: self._bump_font(-1)).pack(side="right", padx=4)
         ttk.Button(tbar, text="A+", command=lambda: self._bump_font(1)).pack(side="right")
 
+        self.coverage_label=ttk.Label(box,textvariable=self.coverage_var,wraplength=1120,justify="left")
+        self.coverage_label.pack(fill="x",pady=(0,6))
+        self.coverage_label.bind("<Configure>",lambda event:self.coverage_label.configure(wraplength=max(300,event.width)))
         # scrolled text
         sc = ttk.Frame(box); sc.pack(fill="both", expand=True)
         self.txt_scroll = ttk.Scrollbar(sc, orient="vertical")
-        self.txt = tk.Text(sc, height=22, wrap="word", bd=0, highlightthickness=0, yscrollcommand=self.txt_scroll.set)
+        self.txt = tk.Text(sc, height=8, wrap="word", bd=0, highlightthickness=0, yscrollcommand=self.txt_scroll.set)
         self.txt_scroll.config(command=self.txt.yview)
         self.txt.pack(side="left", fill="both", expand=True)
         self.txt_scroll.pack(side="right", fill="y")
-        self.txt.configure(font=("Courier New", self._font_size))
-
-        self.status = tk.StringVar(value="ready")
-        self.status_lbl = ttk.Label(parent, textvariable=self.status)
-        self.status_lbl.pack(anchor="w", pady=(6,6))
-        self.progress = ttk.Progressbar(parent, orient="horizontal", mode="determinate")
-        self.progress.pack(fill="x")
+        self.txt.configure(font=("TkDefaultFont", self._font_size))
 
     def _footer(self):
-        bar = ttk.Frame(self); bar.pack(fill="x", padx=10, pady=(6,12))
-        ttk.Button(bar, text="Run EVERYTHING selected", command=self._run_all).pack(side="left")
-        ttk.Button(bar, text="Save CSV+JSON+TXT", command=self._save_now).pack(side="left", padx=(8,0))
+        bar = ttk.Frame(self); bar.pack(side="bottom", fill="x", padx=10, pady=(6,12))
+        ttk.Button(bar, text="Run all selected", command=self._run_all).pack(side="left")
+        ttk.Button(bar, text="Select all sources", command=lambda:[var.set(True) for group in self.category_vars.values() for var in group.values()]).pack(side="left",padx=(8,0))
+        ttk.Button(bar, text="Save reports", command=self._save_now).pack(side="left", padx=(8,0))
+        ttk.Button(bar, text="Export GraphML", command=self._export_graph).pack(side="left", padx=8)
+        ttk.Button(bar, text="Stop search", command=self._cancel).pack(side="left", padx=8)
         ttk.Button(bar, text="About / Legal", command=self._about).pack(side="right")
 
     # theme controls
@@ -515,6 +484,7 @@ class App(tk.Tk):
 
         # Checkboxes, Progress
         style.configure("TCheckbutton", background=P["panel"], foreground=P["fg"])
+        style.map("TCheckbutton", background=[("active", P["sunken"])], indicatorbackground=[("selected", P["fg"]), ("!selected", P["entrybg"])])
         style.configure("Horizontal.TProgressbar", troughcolor=P["pb_trough"], background=P["pb_bar"])
 
         self.status_lbl.configure(foreground=P["muted"])
@@ -523,8 +493,12 @@ class App(tk.Tk):
 
     def _style_text_widgets(self, dark: bool):
         P = DARK if dark else LIGHT
+        for canvas in self.source_canvases:canvas.configure(bg=P['panel'])
         self.banner_txt.configure(bg=P["bg"], fg=P["accent"], insertbackground=P["fg"])
         self.txt.configure(bg=P["bg"], fg=P["fg"], insertbackground=P["fg"])
+        self.txt.configure(selectbackground=P["focus"], selectforeground=P["fg"])
+        for tag in self.txt.tag_names():
+            if tag.startswith("link_"): self.txt.tag_configure(tag, foreground=P["accent"])
         self.txt.tag_configure("link", foreground=P["accent"], underline=True)
         self.txt.tag_bind("link", "<Enter>", lambda e: self.txt.config(cursor="hand2"))
         self.txt.tag_bind("link", "<Leave>", lambda e: self.txt.config(cursor="arrow"))
@@ -535,18 +509,17 @@ class App(tk.Tk):
         try:
             sash = self.pw.sashpos(0)
             total = self.pw.winfo_height()
-            if sash > total * 0.35:
-                # collapse top pane
-                self.pw.sashpos(0, 80)
+            if sash > 455:
+                self.pw.sashpos(0, 440)
             else:
                 # restore to balanced
-                self.pw.sashpos(0, int(total * 0.45))
+                self.pw.sashpos(0, min(510,total-190))
         except Exception:
             pass
 
     def _bump_font(self, delta: int):
         self._font_size = max(8, min(20, self._font_size + delta))
-        self.txt.configure(font=("Courier New", self._font_size))
+        self.txt.configure(font=("TkDefaultFont", self._font_size))
 
     def _select_all(self, cat, val):
         for site, var in self.category_vars[cat].items(): var.set(val)
@@ -555,7 +528,7 @@ class App(tk.Tk):
         return OSINTQuery(
             first=self.var_first.get(), last=self.var_last.get(), username=self.var_user.get(),
             email=self.var_email.get(), phone=self.var_phone.get(), address1=self.var_addr1.get(),
-            city=self.var_city.get(), state=self.var_state.get(), zip=self.var_zip.get()
+            city=self.var_city.get(), state=self.var_state.get(), zip=self.var_zip.get(), domain=self.var_domain.get()
         )
 
     def _task_list_for_cat(self, cat) -> List[str]:
@@ -569,28 +542,62 @@ class App(tk.Tk):
         self._run_sites(sites, skip_cache=self.bypass_cache_var.get())
 
     def _run_all(self):
-        sites, any_sel = [], False
+        sites = []
         for _, sites_map in self.category_vars.items():
             for site, var in sites_map.items():
-                if var.get(): sites.append(site); any_sel = True
-        if not any_sel:
-            if not messagebox.askyesno("Confirm", "Open ALL sites for this query?"): return
-            for _, s in CATS.items(): sites.extend(s)
+                if var.get(): sites.append(site)
+        if not sites:
+            messagebox.showinfo("Nothing selected", "Select at least one source in the tabs above.")
+            return
         self._run_sites(sites, skip_cache=self.bypass_cache_var.get())
 
     def engine_guard(self, e: str) -> str:
         return e if e in ENGINES else "DuckDuckGo"
 
     def _run_sites(self, sites: List[str], skip_cache: bool = False):
-        # fire-and-forget background runner
-        t = threading.Thread(target=self._background_run, args=(sites, skip_cache), daemon=True); t.start()
-
-    def _background_run(self, sites: List[str], skip_cache: bool):
+        if self._running:
+            self.status.set("A search is already running. Wait for it to finish.")
+            return
         q = self._collect_query()
+        q = OSINTQuery(**{k: v.strip() for k, v in q.to_ordered_dict().items()})
+        if not any(value.strip() for value in q.to_ordered_dict().values()):
+            messagebox.showinfo("Search details needed", "Enter a name, username, email, phone, or address first.")
+            return
+        try:
+            threads = max(2, min(12, int(self.threads_var.get())))
+            timeout = max(3, min(60, int(self.timeout_var.get())))
+        except (ValueError, tk.TclError):
+            messagebox.showinfo("Invalid settings", "Threads and timeout must be whole numbers.")
+            return
+        engine = self.engine_guard(self.engine_var.get())
+        q.search_fallback = self.fallback_var.get()
+        self.cancel_event.clear()
+        self._running = True
+        self.results = []
+        self.coverage_plan = {}
+        self.coverage_var.set("Preparing separate lookups for the supplied inputs...")
+        self.txt.delete("1.0", "end")
+        self.status.set("Searching selected sources...")
+        threading.Thread(target=self._background_run_guarded,
+                         args=(list(dict.fromkeys(sites)), skip_cache, q, threads, timeout, engine, self.cancel_event),
+                         daemon=True).start()
 
+    def _background_run_guarded(self, *args):
+        try:
+            self._background_run(*args)
+        except Exception as exc:
+            self.ui_queue.put(("note", f"Search failed: {exc}"))
+            self.ui_queue.put(("failed", str(exc)))
+
+    def _background_run(self, sites, skip_cache, q, threads, timeout, engine, cancel=None):
+        q.search_engine = engine
+        prioritized = [s for s in PRIORITY_SITES if s in sites]
+        ordered_sites = prioritized + [s for s in sites if s not in prioritized]
+        tasks = plan_lookups(ordered_sites,q,CATS)
+        self.ui_queue.put(("coverage_setup",coverage_plan(q,tasks)))
         # if skip cache is False, try load and return cached hits immediately
         if not skip_cache:
-            cache_hits = load_cache(q)
+            cache_hits = load_cache(q, sites, engine)
             if cache_hits:
                 self.ui_queue.put(("note", f"cache: {len(cache_hits)} hits loaded"))
                 for h in cache_hits: self.ui_queue.put(("hit", h))
@@ -606,194 +613,48 @@ class App(tk.Tk):
 
         total = len(sites)
         self.ui_queue.put(("setup_progress", total))
-        threads = max(2, min(40, int(self.threads_var.get())))
-        timeout = max(3, int(self.timeout_var.get()))
-        engine = self.engine_guard(self.engine_var.get())
-
-        prioritized = [s for s in PRIORITY_SITES if s in sites]
-        remaining = [s for s in sites if s not in prioritized]
-        ordered_sites = prioritized + remaining
 
         results: List[OSINTHit] = []
+        remaining={site:sum(task.site==site for task in tasks) for site in ordered_sites}
+        has_web=any(task.site in ENGINE_SOURCES for task in tasks)
+        web_workers=1
+        normal_workers=max(1,threads-web_workers) if has_web else threads
+        paused_engines=set()
+        def run_lookup(task):
+            if task.site in ENGINE_SOURCES:task.query.search_skip_engines=tuple(paused_engines)
+            found=_run_site_with_timeout(task.site,task.query,timeout,cancel)
+            if task.site in ENGINE_SOURCES:
+                paused_engines.update(h.raw['engine'] for h in found if h.raw.get('engine') and h.raw.get('http_status') in (202,403,429))
+            return found
+        # Independent budgets per input prevent one stalled name/email search
+        # from consuming the entire web-search budget for later fields.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=normal_workers) as normal, concurrent.futures.ThreadPoolExecutor(max_workers=web_workers) as web:
+            future_map={}
+            for task in tasks:
+                executor=web if task.site in ENGINE_SOURCES else normal
+                future_map[executor.submit(run_lookup,task)]=task
+            for fut in concurrent.futures.as_completed(future_map):
+                task=future_map[fut];site=task.site
+                try: hits=fut.result()
+                except Exception as exc:
+                    hits=[manual_path(site,task.query,SITE_DOMAIN,SITE_URL,CATS,"error",str(exc))]
+                if hits and not any(h.raw.get("kind") in ("record","candidate") for h in hits) and any(h.raw.get("kind") in ("manual","error","timeout","not_found","blocked","unavailable") for h in hits):
+                    hits[0].raw["search_url"]=dork_url(site,task.query,engine)
+                    hits[0].raw["search_engine"]=engine
+                for hit in hits:
+                    hit.raw.setdefault("source",site)
+                    hit.raw.setdefault("checked_at",datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                    hit.raw.setdefault("input_fields",list(task.fields))
+                    annotate_hit(hit,q)
+                    hit.raw["task_id"]=task.task_id
+                    hit.raw["coverage_plan"]=coverage_plan(q,tasks)
+                    results.append(hit);self.ui_queue.put(("hit",hit))
+                remaining[site]-=1
+                if remaining[site]==0:self.ui_queue.put(("inc_progress",1))
 
-        # --- NEW: run public dataset checks first, per-site with tailored payloads ---
-        sites_to_scrape = list(ordered_sites)  # default: scrape everything
-        self.ui_queue.put(("note", "Running public dataset lookups first..."))
-
-        # build quick sets for categorization
-        prop_sites = set(CATS.get("Property Records & Accessor", []))
-        rev_sites = set(CATS.get("Reverse Phone / Address", []))
-
-        satisfied_sites = set()
-        results_from_datasets = []
-
-        # Build token set from the GUI inputs (only tokens we care about)
-        token_candidates = []
-        if q.full_name:
-            # include the full name and also first/last separately
-            token_candidates.append(q.full_name.lower())
-            if q.first: token_candidates.append(q.first.lower())
-            if q.last: token_candidates.append(q.last.lower())
-        if q.username: token_candidates.append(q.username.lower())
-        if q.email: token_candidates.append(q.email.lower())
-        if q.phone:
-            p_digits = digits_only(q.phone)
-            if p_digits: token_candidates.append(p_digits)
-        if q.address1: token_candidates.append(q.address1.lower())
-        if q.city: token_candidates.append(q.city.lower())
-        if q.state: token_candidates.append(q.state.lower())
-        if q.zip: token_candidates.append(q.zip.lower())
-
-        # dedupe tokens
-        tokens = [t for i, t in enumerate(token_candidates) if t and t not in token_candidates[:i]]
-        # safety: if there are no tokens at all, don't call datasets (no user inputs)
-        call_datasets = len(tokens) > 0
-
-        # Query each site with a tailored payload (address-first for property sites, etc.)
-        for s in ordered_sites:
-            # Do not pass the site's domain to the datasets API — we want datasets to search only user input.
-            site_entry = {"label": s}
-
-            # build a per-site qdict tailored to the site's expected fields
-            if s in prop_sites:
-                site_qdict = {
-                    "address1": q.address1 or "",
-                    "city": q.city or "",
-                    "state": q.state or "",
-                    "zip": q.zip or "",
-                    "first": q.first or "",
-                    "last": q.last or ""
-                }
-            elif s in rev_sites:
-                site_qdict = {
-                    "phone": q.phone or "",
-                    "first": q.first or "",
-                    "last": q.last or "",
-                    "address1": q.address1 or ""
-                }
-            else:
-                site_qdict = q.to_ordered_dict()
-
-            if not call_datasets:
-                # no user input to search for — skip datasets for this run
-                self.ui_queue.put(("note", f"Skipping datasets lookup for {s} (no user tokens present)"))
-                continue
-
-            # try a single-site API if available, otherwise fallback to batch API
-            try:
-                if hasattr(DATASETS, "search_site_for_query"):
-                    ds_hits = DATASETS.search_site_for_query(site_entry, site_qdict) or []
-                else:
-                    # some implementations expect a batch call; pass the single-entry list and the qdict
-                    ds_hits = DATASETS.search_sites_for_query([site_entry], site_qdict) or []
-            except Exception as e:
-                ds_hits = []
-                self.ui_queue.put(("note", f"[!] datasets lookup failed for {s}: {str(e)[:200]}"))
-
-            # Process returned dataset hits (if any). Only accept hits that include at least one user token.
-            for dh in ds_hits:
-                # dh expected: {'site': ..., 'title':..., 'snippet':..., 'url':..., 'raw': {...}}
-                title = (dh.get("title", "") or "").lower()
-                snippet = (dh.get("snippet", "") or "").lower()
-                url = (dh.get("url", "") or "").lower()
-                raw_text = json.dumps(dh.get("raw", {}) or {}).lower()
-
-                combined = " ".join([title, snippet, url, raw_text])
-
-                # check whether any token appears in the dataset hit
-                matched = False
-                for tok in tokens:
-                    if tok and tok in combined:
-                        matched = True
-                        break
-
-                if not matched:
-                    # skip irrelevant dataset hits (e.g., crt.sh certs for the lookup site)
-                    self.ui_queue.put(("note", f"[datasets skip] {s}: hit didn't match query tokens -> {dh.get('url','')[:200]}"))
-                    continue
-
-                site_label = dh.get("site", s).split(" (")[0]
-                try:
-                    hit = OSINTHit(site_label, dh.get("title",""), dh.get("snippet",""), dh.get("url",""), dh.get("raw", {}))
-                    results_from_datasets.append(hit)
-                    self.ui_queue.put(("hit", hit))
-                    satisfied_sites.add(site_label)
-                except Exception:
-                    self.ui_queue.put(("note", f"[dataset] {dh.get('title')} -> {dh.get('url')}"))
-
-        # If datasets returned anything, remove satisfied sites from the live-scrape list
-        if satisfied_sites:
-            sites_to_scrape = [s for s in ordered_sites if s not in satisfied_sites]
-            self.ui_queue.put(("note", f"Datasets satisfied: {', '.join(sorted(list(satisfied_sites))) }"))
-        else:
-            self.ui_queue.put(("note", "No dataset hits found — will proceed to scrapers."))
-
-        # merge dataset results into main results list
-        for r in results_from_datasets:
-            results.append(r)
-
-        # If there are no sites left to scrape (datasets-only), skip the scraper pool
-        if not sites_to_scrape:
-            self.ui_queue.put(("note", "All sites satisfied by datasets — skipping live scrapers."))
-            # Save cache and reports from 'results' so UI persists findings
-            if results:
-                save_cache(q, results)
-                self.ui_queue.put(("note", f"Saved cache for this query ({len(results)} rows)"))
-            csv_path, json_path, txt_path = save_reports(results)
-            self.ui_queue.put(("note", f"Saved CSV: {csv_path}  JSON: {json_path}  TXT: {txt_path}"))
-            self.ui_queue.put(("done", len(results))); return
-
-        # --- continue with live scrapers, but only for remaining sites ---
-        with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as ex:
-            # Create futures, but allow a larger timeout for Username Pack (direct)
-            future_map = {}
-            for site in sites_to_scrape:
-                site_timeout = timeout
-                if site == "Username Pack (direct)":
-                    site_timeout = max(timeout, 20)  # give username pack more breathing room
-                future = ex.submit(_run_site_with_timeout, site, q, site_timeout)
-                future_map[future] = (site, site_timeout)
-
-            for fut in concurrent.futures.as_completed(list(future_map.keys())):
-                site, used_timeout = future_map[fut]
-                try:
-                    hits = fut.result()
-                    if hits:
-                        self.ui_queue.put(("note", f"[+] {site}: {len(hits)} hit(s)"))
-                        for h in hits:
-                            results.append(h); self.ui_queue.put(("hit", h))
-                    else:
-                        home = site_base_url(site)
-                        dork = dork_url(site, q, engine)
-                        if home:
-                            results.append(OSINTHit(site, f"{site} (open site)", "No scraper results — open site.", home, {"fallback": "home"}))
-                            self.ui_queue.put(("hit", results[-1]))
-                        results.append(OSINTHit(site, f"{site} (search dork)", "No scraper results — try search.", dork, {"fallback": "dork"}))
-                        self.ui_queue.put(("hit", results[-1]))
-                        self.ui_queue.put(("note", f"[~] {site}: provided links (site + dork)"))
-                except concurrent.futures.TimeoutError:
-                    home = site_base_url(site)
-                    dork = dork_url(site, q, engine)
-                    if home:
-                        h = OSINTHit(site, f"{site} (timeout→open site)", f"Timed out after {used_timeout}s", home, {"timeout": True, "fallback": "home"})
-                        results.append(h); self.ui_queue.put(("hit", h))
-                    h = OSINTHit(site, f"{site} (timeout→dork)", f"Timed out after {used_timeout}s", dork, {"timeout": True, "fallback": "dork"})
-                    results.append(h); self.ui_queue.put(("hit", h))
-                    self.ui_queue.put(("note", f"[!] {site}: timeout, provided links"))
-                except Exception as e:
-                    home = site_base_url(site)
-                    dork = dork_url(site, q, engine)
-                    if home:
-                        h = OSINTHit(site, f"{site} (error→open site)", str(e)[:300], home, {"error": str(e), "fallback": "home"})
-                        results.append(h); self.ui_queue.put(("hit", h))
-                    h = OSINTHit(site, f"{site} (error→dork)", str(e)[:300], dork, {"error": str(e), "fallback": "dork"})
-                    results.append(h); self.ui_queue.put(("hit", h))
-                    self.ui_queue.put(("note", f"[!] {site}: error, provided links"))
-                self.ui_queue.put(("inc_progress", 1))
-
-        if results:
+        if results and any(h.raw.get("kind") in ("record", "candidate") for h in results) and not any(h.raw.get("kind") in ("manual", "error", "timeout", "cancelled", "blocked", "unavailable") for h in results) and not (cancel is not None and cancel.is_set()):
             # Save cache (fresh results). This will create or overwrite the cache file.
-            save_cache(q, results)
+            save_cache(q, results, sites, engine)
             self.ui_queue.put(("note", f"Saved cache for this query ({len(results)} rows)"))
         csv_path, json_path, txt_path = save_reports(results)
         self.ui_queue.put(("note", f"Saved CSV: {csv_path}  JSON: {json_path}  TXT: {txt_path}"))
@@ -803,7 +664,7 @@ class App(tk.Tk):
             try: self.ui_queue.put(("note", f"Registered scrapers: {', '.join(sorted(list(PLUG.SCRAPERS.keys())))}"))
             except Exception: pass
 
-        self.ui_queue.put(("done", len(results)))
+        self.ui_queue.put(("cancelled" if cancel is not None and cancel.is_set() else "done", len(results)))
 
     def _insert_link(self, widget: tk.Text, label: str, url: str):
         start = widget.index("end-1c"); widget.insert("end", label); end = widget.index("end-1c")
@@ -812,28 +673,151 @@ class App(tk.Tk):
         widget.tag_config(tag, foreground=P["accent"], underline=True)
         widget.tag_bind(tag, "<Button-1>", lambda e, u=url: webbrowser.open_new_tab(u))
 
+    def _matches_filter(self, hit):
+        keyword = self.filter_var.get().strip().casefold()
+        kind = hit.raw.get("kind", "candidate")
+        input_label=self.input_filter_var.get()
+        if input_label!="All inputs" and not any(FIELD_LABELS.get(field,field)==input_label for field in set(hit.raw.get('input_fields',('other',)))|set(hit.raw.get('matched_inputs',()))):return False
+        return ((self.kind_var.get() in ("All", kind) or (self.kind_var.get()=="Findings" and kind in ("record","candidate")) or (self.kind_var.get()=="Shared evidence" and len(hit.raw.get('matched_inputs',()))>=2)) and
+                keyword in " ".join((hit.site, hit.title, hit.snippet, hit.url)).casefold())
+
+    def _render_hit(self, hit):
+        kind = hit.raw.get("kind", "candidate")
+        labels=", ".join(FIELD_LABELS.get(f,f) for f in hit.raw.get('input_fields',()))
+        engine=hit.raw.get('engine')
+        if engine:labels+=(" / " if labels else "")+engine+(" fallback" if hit.raw.get('fallback_from') else "")
+        detail=(" | "+labels) if labels else ""
+        self.txt.insert("end", f"[{kind.upper()} | {hit.site}{detail}] {hit.title}\n{hit.snippet}\n")
+        if len(hit.raw.get('matched_inputs',()))>=2:
+            self.txt.insert('end','Supplied details found together: '+', '.join(FIELD_LABELS.get(f,f) for f in hit.raw['matched_inputs'])+'. Review the source relationship.\n')
+        if hit.url.startswith(("https://", "http://")):
+            self._insert_link(self.txt, hit.url, hit.url)
+        search_url=hit.raw.get("search_url")
+        if search_url:
+            self.txt.insert("end", "\n")
+            self._insert_link(self.txt, "Search "+hit.raw.get("search_engine","web"),search_url)
+        evidence_url=hit.raw.get("source_url")
+        if evidence_url and evidence_url!=hit.url:
+            self.txt.insert("end", "\nSource: ")
+            self._insert_link(self.txt,evidence_url,evidence_url)
+        self.txt.insert("end", "\n\n")
+        self.txt.see("end")
+
+    def _refresh_results(self):
+        if not hasattr(self, "txt"):
+            return
+        self.txt.delete("1.0", "end")
+        for tag in self.txt.tag_names():
+            if tag.startswith("link_"):
+                self.txt.tag_delete(tag)
+        for hit in balanced_findings(self.results):
+            if self._matches_filter(hit):
+                self._render_hit(hit)
+        if self.results and not self.txt.get("1.0","end").strip():
+            self.txt.insert("end","No findings match this view. Input coverage above shows whether lookups failed, returned no matches, or have no selected collector. Choose All statuses to inspect each attempt.\n")
+        self.txt.yview_moveto(0)
+
+    def _keep_results_visible(self,event):
+        # Preserve the divider position unless resizing would hide a usable pane.
+        if event.height>600:self._reset_pane_bounds()
+
+    def _reset_pane_bounds(self):
+        height=self.pw.winfo_height()
+        if height>600:self.pw.sashpos(0,max(440,min(self.pw.sashpos(0),height-190)))
+
+    def _update_coverage(self):
+        stats=coverage(self.results,self.coverage_plan,finished=not self._running)
+        self.coverage_var.set(" | ".join(row['label']+": "+row['status'] for row in stats.values()) or "No input coverage recorded.")
+
+    def _save_settings(self):
+        try:
+            selected=[site for group in self.category_vars.values() for site,var in group.items() if var.get()]
+            save_settings(os.path.join(os.path.dirname(__file__), "settings.json"), self.threads_var.get(),
+                          self.timeout_var.get(), self.dark_var.get(), selected, self.engine_guard(self.engine_var.get()), self.fallback_var.get())
+            self.status.set("Settings saved. Search details and API keys are not included.")
+        except (OSError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Settings", str(exc))
+
+    def _load_settings(self):
+        try:
+            values=load_settings(os.path.join(os.path.dirname(__file__), "settings.json"),
+                                 {s for group in CATS.values() for s in group})
+            self.threads_var.set(values['workers']); self.timeout_var.set(values['timeout'])
+            self.engine_var.set(self.engine_guard(values.get('engine', 'DuckDuckGo')))
+            self.fallback_var.set(values.get('search_fallback',True))
+            self.dark_var.set(values['dark']); self._apply_theme(values['dark'])
+            for group in self.category_vars.values():
+                for site,var in group.items(): var.set(site in values['selected'])
+            self.status.set("Settings loaded.")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror("Settings", str(exc))
+
+    def _export_graph(self):
+        if not any(h.raw.get('kind','candidate') in ('record','candidate') for h in self.results):
+            messagebox.showinfo('No findings to graph','No records or candidates were retrieved. Choose All in the results filter to inspect source failures and manual paths; Save reports preserves those details.')
+            return
+        path=os.path.join(REPORTS_DIR, "osint_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f") + ".graphml")
+        try:
+            export_graphml(self.results, path)
+            messagebox.showinfo("Graph exported", "Findings and observed relationships exported; manual links and source failures are excluded:\n" + path)
+        except OSError as exc:
+            messagebox.showerror("Graph export", str(exc))
+
     def _process_ui_queue(self):
         while not self.ui_queue.empty():
             t, payload = self.ui_queue.get()
             if t == "hit":
                 h: OSINTHit = payload
                 self.results.append(h)
-                self.txt.insert("end", f"[{h.site}] {h.title}\n{h.snippet}\n")
-                self._insert_link(self.txt, h.url, h.url)
-                self.txt.insert("end", "\n\n"); self.txt.see("end")
+                self._update_coverage()
+                if self._matches_filter(h):
+                    self._render_hit(h)
+            elif t == "coverage_setup":
+                self.coverage_plan=payload
+                self._update_coverage()
             elif t == "note":
-                self.status.set(payload); self.txt.insert("end", payload + "\n"); self.txt.see("end")
+                self.status.set(payload)
             elif t == "setup_progress":
                 self.progress["maximum"] = payload; self.progress["value"] = 0
             elif t == "inc_progress":
                 self.progress["value"] = min(self.progress["maximum"], self.progress["value"] + int(payload))
-            elif t == "done":
-                self.status.set(f"done. {payload} result rows ready."); self.progress["value"] = self.progress["maximum"]
-        self.after(200, self._process_ui_queue)
+            elif t == "failed":
+                self._running = False
+                self.status.set(f"Search failed: {payload}")
+                self._update_coverage()
+            elif t in ("done", "cancelled"):
+                self._running = False
+                self._update_coverage()
+                self._refresh_results()
+                counts = {kind:sum(h.raw.get("kind","candidate")==kind for h in self.results) for kind in ("record","candidate","context")}
+                issues = len(self.results)-sum(counts.values())
+                self.status.set(f"{t}: {counts['record']} records, {counts['candidate']} candidates, {counts['context']} context; {issues} source issues/paths (All shows details).")
+                self.progress["value"] = self.progress["maximum"]
+        self._queue_after_id = self.after(200, self._process_ui_queue)
+
+    def destroy(self):
+        self.cancel_event.set()
+        for attr in ("_queue_after_id", "_sash_after_id"):
+            callback = getattr(self, attr, None)
+            if callback:
+                try:
+                    self.after_cancel(callback)
+                except tk.TclError:
+                    pass
+        super().destroy()
+
+    def _close(self):
+        self.destroy()
+
+    def _cancel(self):
+        if self._running:
+            self.cancel_event.set()
+            self.status.set("Stopping searches and preserving partial results...")
 
     def _save_now(self):
         csv_path, json_path, txt_path = save_reports(self.results)
-        messagebox.showinfo("Saved", f"CSV: {csv_path}\nJSON: {json_path}\nTXT: {txt_path}")
+        html_path=os.path.splitext(json_path)[0]+'.html'
+        messagebox.showinfo("Saved", f"Readable report: {html_path}\nCSV: {csv_path}\nJSON: {json_path}\nTXT: {txt_path}")
 
     def _about(self):
         messagebox.showinfo("About / Legal",
@@ -850,12 +834,6 @@ class App(tk.Tk):
         if not u:
             messagebox.showinfo("No username", "Enter a username first.")
             return
-        # always skip cache for quick username lookup so user sees fresh results
-        # clear previous results and show immediate feedback so user knows it's started
-        self.results = []
-        self.txt.delete("1.0", "end")
-        self.status.set(f"running username pack for @{u} (bypassing cache)...")
-        # call run_sites but force skip_cache True
         self._run_sites(["Username Pack (direct)"], skip_cache=True)
 
     def _clear_cache_current(self):

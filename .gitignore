@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+venv/
+.agents/
+.codex/
+.aws/
+.env
+.env.*
+!.env.example
+reports/
+logs/
+work/
+settings.json
+settings.tmp

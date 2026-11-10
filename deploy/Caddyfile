@@ -1,0 +1,8 @@
+osint.churchofmalware.org {
+    request_body {
+        max_size 8KB
+    }
+    reverse_proxy app:8000
+    header Strict-Transport-Security "max-age=31536000"
+    # No access log: query identifiers and result URLs must not be logged.
+}

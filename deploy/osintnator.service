@@ -1,0 +1,67 @@
+[Unit]
+Description=OSINTNATOR isolated public research service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+DynamicUser=yes
+User=osintnator
+Group=osintnator
+WorkingDirectory=/opt/osintnator/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=OSINTNATOR_ORIGIN=https://osint.churchofmalware.org
+EnvironmentFile=/etc/osintnator/network.env
+RuntimeDirectory=osintnator
+RuntimeDirectoryMode=0750
+ExecStartPost=+/usr/bin/chgrp www-data /run/osintnator
+# Only the service owner, root and Nginx can reach this Unix socket. There is
+# no application TCP listener. Nginx overwrites forwarding headers itself.
+ExecStart=/opt/osintnator/venv/bin/python -m uvicorn web_app:create_app --factory --uds /run/osintnator/api.sock --workers 1 --no-access-log --no-server-header --proxy-headers --forwarded-allow-ips *
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Hide other application trees; mount only this service's code/runtime.
+TemporaryFileSystem=/opt:ro /srv:ro /var/lib:ro /var/log:ro
+BindReadOnlyPaths=/opt/osintnator
+BindReadOnlyPaths=/etc/osintnator/resolv.conf:/etc/resolv.conf
+# Public DNS is configured above so no private-network DNS exception is needed.
+IPAddressDeny=localhost link-local multicast
+IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 192.0.0.0/24 198.18.0.0/15 240.0.0.0/4 fc00::/7
+# Host public IPs and other protected origins are added in a deployment drop-in.
+MemoryMax=768M
+MemorySwapMax=0
+CPUQuota=200%
+TasksMax=96
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

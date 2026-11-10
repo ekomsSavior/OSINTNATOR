@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements.txt requirements-web.txt ./
+RUN pip install --no-cache-dir -r requirements-web.txt && useradd --uid 10001 --create-home osintnator
+COPY models.py source_catalog.py query_inputs.py research_plan.py evidence_matching.py bounded_runner.py scrapers.py api_sources.py free_sources.py public_web.py web_search.py identity_sources.py property_sources.py contact_sources.py web_fetch.py lookup_paths.py graph_export.py report_html.py web_catalog.py web_service.py web_guard.py web_app.py ./
+COPY web/ ./web/
+COPY jurisdiction_catalog.py property_directory.py parcel_sources.py obituary_sources.py ./
+COPY linkedin_sources.py ./
+COPY data/us_property_directory.json ./data/us_property_directory.json
+USER 10001
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/healthz',headers={'Host':os.environ['OSINTNATOR_ORIGIN'].split('://')[1]}); urllib.request.urlopen(r,timeout=3)"
+CMD ["python","-m","uvicorn","web_app:create_app","--factory","--host","0.0.0.0","--port","8000","--workers","1","--no-access-log","--proxy-headers"]

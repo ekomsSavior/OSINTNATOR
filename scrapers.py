@@ -1,7 +1,7 @@
 # scrapers.py — lightweight, robust, no-Playwright required
 from typing import List, Dict, Any, Callable
 from dataclasses import dataclass
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, quote
 import random
 import time
 import re
@@ -41,43 +41,22 @@ UA_POOL = [
     "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
 ]
 
-LOG_DIR = pathlib.Path("logs")
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_PATH = LOG_DIR / "scrapers.log"
-
-# Basic logging; optionally mirror to console when debug env var set
-logging.basicConfig(
-    filename=str(LOG_PATH),
-    filemode="a",
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    level=logging.INFO,
-)
 log = logging.getLogger("scrapers")
-
-if os.environ.get("OSINTNATOR_DEBUG", "0") == "1":
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    ch.setLevel(logging.DEBUG)
-    log.addHandler(ch)
-    log.setLevel(logging.DEBUG)
+if os.environ.get("OSINTNATOR_WEB_WORKER") == "1":
+    # Hosted searches must never write identifiers to application logs.
+    log.disabled = True
+else:
+    LOG_DIR = pathlib.Path(__file__).resolve().parent / "logs"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_PATH = LOG_DIR / "scrapers.log"
+    logging.basicConfig(filename=str(LOG_PATH), filemode="a",
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", level=logging.INFO)
+    if os.environ.get("OSINTNATOR_DEBUG", "0") == "1":
+        log.addHandler(logging.StreamHandler())
+        log.setLevel(logging.DEBUG)
 
 # ======================= Types & Registry =======================
-@dataclass
-class OSINTQuery:
-    first: str = ""; last: str = ""; username: str = ""; email: str = ""; phone: str = ""
-    address1: str = ""; city: str = ""; state: str = ""; zip: str = ""
-    @property
-    def full_name(self) -> str:
-        parts = [self.first.strip(), self.last.strip()]
-        return " ".join([p for p in parts if p])
-
-@dataclass
-class OSINTHit:
-    site: str
-    title: str
-    snippet: str
-    url: str
-    raw: Dict[str, Any]
+from models import OSINTQuery, OSINTHit
 
 Scraper = Callable[[requests.Session, OSINTQuery], List[OSINTHit]]
 SCRAPERS: Dict[str, Scraper] = {}
@@ -103,11 +82,13 @@ def _build_retry_adapter(total=DEFAULT_RETRIES):
 
 def get_session() -> requests.Session:
     """Return a configured Session (or cloudscraper) with retries."""
-    if HAVE_CLOUD:
+    if HAVE_CLOUD and os.environ.get("OSINTNATOR_WEB_WORKER") != "1":
         s = cloudscraper.create_scraper()
     else:
         s = requests.Session()
 
+    if os.environ.get("OSINTNATOR_WEB_WORKER") == "1":
+        s.trust_env = False
     s.headers.update({
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -182,24 +163,10 @@ def _fetch(sess: requests.Session, url: str, method: str = "GET", **kwargs) -> r
         raise
 
 def _head_or_get(sess: requests.Session, url: str, **kwargs) -> requests.Response:
-    time.sleep(random.uniform(MIN_JITTER, MAX_JITTER))
-    headers = kwargs.pop("headers", {})
-    headers = {**headers, "User-Agent": random.choice(UA_POOL)}
-    kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
-    try:
-        r = sess.head(url, headers=headers, allow_redirects=True, **kwargs)
-        if r.status_code in (405, 403) or not getattr(r, "text", ""):
-            r = sess.get(url, headers=headers, allow_redirects=True, **kwargs)
-        if r.status_code >= 400:
-            _log_http(r, url, "(HEAD/GET)")
-        if _looks_js_blocked(getattr(r, "text", "")):
-            rendered = _maybe_rendered_copy(url)
-            if rendered:
-                r._content = rendered.encode("utf-8", errors="ignore")
-        return r
-    except Exception as e:
-        log.warning(f"HEAD/GET failed for {url}: {e}")
-        raise
+    # Profile checks need the page body; HEAD followed by GET doubled traffic.
+    kwargs.setdefault("allow_redirects", True)
+    return _fetch(sess, url, **kwargs)
+
 
 def probe_site_for_terms(sess: requests.Session, base_site: str, q: OSINTQuery,
                          probes: List[str], max_hits: int = 2) -> List[OSINTHit]:
@@ -208,7 +175,7 @@ def probe_site_for_terms(sess: requests.Session, base_site: str, q: OSINTQuery,
     """
     tokens = []
     if q.username: tokens.append(q.username.lower())
-    if q.full_name: tokens.extend([p.lower() for p in q.full_name.split() if p])
+    if q.full_name: tokens.append(q.full_name.lower())
     if q.email: tokens.append(q.email.lower())
     if q.phone:
         d = "".join(c for c in q.phone if c.isdigit())
@@ -217,21 +184,21 @@ def probe_site_for_terms(sess: requests.Session, base_site: str, q: OSINTQuery,
     if not tokens:
         return []
 
-    hits: List[OSINTHit] = []
-    for tmpl in probes:
-        url = tmpl.format(
-            username=quote_plus(q.username or ""),
-            first=quote_plus(q.first or ""),
-            last=quote_plus(q.last or ""),
-            email=quote_plus(q.email or ""),
-            phone=quote_plus("".join(c for c in q.phone if c.isdigit()))
-        )
+    hits: List[OSINTHit] = StreamingHits(sess)
+    for url in probes:
         try:
             r = _fetch(sess, url)
-            if r.status_code >= 400 or not getattr(r, "text", ""):
+            if r.status_code >= 400 or not getattr(r, "text", "") or _looks_js_blocked(r.text):
+                hits.append(OSINTHit(base_site, "Open direct lookup manually",
+                    f"Automatic lookup unavailable (HTTP {r.status_code}). Open this source's search page and review it manually.",
+                    url, {"kind": "manual", "fallback": "direct", "code": r.status_code}))
                 continue
             body = (r.text or "")
-            body_lower = body.lower()
+            soup = BeautifulSoup(body, "html.parser")
+            for element in soup(["script", "style", "noscript"]):
+                element.decompose()
+            visible_text = soup.get_text(" ", strip=True)
+            body_lower = visible_text.lower()
             found = any(tok in body_lower for tok in tokens if tok)
             title = ""
             try:
@@ -240,18 +207,28 @@ def probe_site_for_terms(sess: requests.Session, base_site: str, q: OSINTQuery,
             except Exception:
                 pass
             if found or (q.username and q.username.lower() in (title or "")):
-                snippet = re.sub(r"\s+", " ", body)[:300]
-                hits.append(OSINTHit(base_site, f"probe → {url}", snippet, url, {"probed": True}))
+                snippet = visible_text[:300]
+                hits.append(OSINTHit(base_site, "Possible match — review source", snippet, url, {"probed": True, "kind": "candidate"}))
                 if len(hits) >= max_hits:
                     break
+            else:
+                hits.append(OSINTHit(base_site, "Review direct lookup",
+                    "No matching text was extracted. Open this query on the source and review the results.",
+                    url, {"kind": "manual", "fallback": "direct"}))
         except Exception as e:
             log.debug(f"probe failed {url}: {e}")
-            continue
+            hits.append(OSINTHit(base_site, "Retry direct lookup in browser",
+                "The automated request failed. This is the attempted lookup URL, not a confirmed match.",
+                url, {"kind": "manual", "fallback": "direct"}))
     return hits
 
 def _mk_negative(site: str, url: str, reason: str, code: int | None = None) -> OSINTHit:
     snip = f"{reason}" + (f" (HTTP {code})" if code else "")
-    return OSINTHit(site, f"{site}: not found", snip, url, {"exists": False, "reason": reason, "code": code})
+    missing = code == 404
+    return OSINTHit(site, f"{site}: {'not found' if missing else 'unverified — open manually'}",
+                    snip, url, {"exists": False if missing else None,
+                               "kind": "not_found" if missing else "manual",
+                               "reason": reason, "code": code})
 
 # ---------- Username normalization helpers ----------
 def _norm_user_for(service: str, u: str) -> str:
@@ -265,6 +242,7 @@ def _norm_user_for(service: str, u: str) -> str:
         "Kaggle", "Keybase", "GitLab", "Medium", "Pinterest",
         "Twitch", "Instagram", "Twitter/X",
     }
+    u = re.sub(r'\s+', '', u.strip().lstrip('@'))
     if service in lower_sites:
         return u.lower()
     # YouTube handles are case-insensitive; keep as-is (but lower doesn’t hurt)
@@ -273,11 +251,7 @@ def _norm_user_for(service: str, u: str) -> str:
     return u
 
 # ======================= Site-Specific Scrapers =======================
-@register("Username Pack (direct)")
-def scrape_username_pack(sess: requests.Session, q: OSINTQuery) -> List[OSINTHit]:
-    if not q.username:
-        return []
-    u_input = q.username
+def username_services(u_input):
     services = [
         ("GitHub",        lambda u: f"https://github.com/{u}",                     r'<title>[^<]*?github[^<]*', True),
         ("Reddit",        lambda u: f"https://www.reddit.com/user/{u}",            r'/user/[^/]+', True),
@@ -304,24 +278,73 @@ def scrape_username_pack(sess: requests.Session, q: OSINTQuery) -> List[OSINTHit
         ("Facebook",      lambda u: f"https://www.facebook.com/{u}",               r'facebook', False),
         ("LinkedIn",      lambda u: f"https://www.linkedin.com/in/{u}/",           r'linkedin', False),
     ]
+    return [service for service in services if service[0] not in ("Steam (prof)", "StackOverflow") or u_input.isdigit()]
 
-    hits: List[OSINTHit] = []
+
+def username_paths(q):
+    return [OSINTHit(name, "Open profile path", "Not checked automatically; review this profile URL manually.",
+                    url_fn(quote(_norm_user_for(name, q.username), safe="")),
+                    {"kind": "manual", "fallback": "direct"})
+            for name, url_fn, _, _ in username_services(q.username)] if q.username else []
+
+
+class StreamingHits(list):
+    def __init__(self, session):
+        super().__init__()
+        self.emit = getattr(session, "emit_hit", None)
+    def append(self, hit):
+        super().append(hit)
+        if callable(self.emit):
+            self.emit(hit)
+
+
+def profile_details(body, service, username, url):
+    """Require a profile-specific marker; a username echoed in HTML is insufficient."""
+    from urllib.parse import urlsplit
+    soup = BeautifulSoup(body, 'html.parser')
+    if _looks_js_blocked(body) or re.search(r"user not found|account (?:does not|doesn't) exist|page not found|profile not found", soup.get_text(' ',strip=True)[:2500],re.I):
+        return None
+    selectors = {'GitHub':'.p-nickname', 'HackerNews':'a[href="user?id='+username+'"]'}
+    marker = soup.select_one(selectors[service]) if service in selectors else None
+    matched = bool(marker and marker.get_text(' ',strip=True).strip('@').casefold()==username.casefold())
+    declared = soup.find('meta',attrs={'property':'og:type'})
+    canonical = soup.find('link',attrs={'rel':'canonical'}) or soup.find('meta',attrs={'property':'og:url'})
+    page_title=soup.title.get_text(' ',strip=True) if soup.title else ''
+    specific_title=bool(page_title) and page_title.casefold() not in (service.casefold(),'profile','user profile','home')
+    if declared and declared.get('content','').lower()=='profile' and canonical:
+        candidate=canonical.get('href') or canonical.get('content','')
+        expected=urlsplit(url); actual=urlsplit(candidate)
+        matched = matched or (specific_title and actual.hostname==expected.hostname and actual.path.rstrip('/').casefold()==expected.path.rstrip('/').casefold())
+    if not matched: return None
+    description=soup.find('meta',attrs={'name':'description'}) or soup.find('meta',attrs={'property':'og:description'})
+    title=soup.title.get_text(' ',strip=True) if soup.title else service+': '+username
+    snippet=description.get('content','') if description else title
+    return title,snippet[:700]
+
+
+@register("Username Pack (direct)")
+def scrape_username_pack(sess, q):
+    if not q.username:
+        return []
+    original_input = q.username.strip().lstrip('@')
+    u_input = re.sub(r'\s+', '', original_input)
+    services = username_services(u_input)
+    hits: List[OSINTHit] = StreamingHits(sess)
     positives = 0
 
     for name, url_fn, verify_re, must_contain in services:
         try:
-            norm_u = _norm_user_for(name, u_input)
+            norm_u = quote(_norm_user_for(name, u_input), safe="")
             url = url_fn(norm_u)
             r = _head_or_get(sess, url)
             code = getattr(r, "status_code", 0)
             if code == 200:
                 body = (r.text or "").lower()
-                ok = True
-                if must_contain:
-                    ok = bool(re.search(verify_re, body, flags=re.I))
-                if ok:
-                    snip = re.sub(r"\s+", " ", body)[:220] if body else ""
-                    hits.append(OSINTHit(f"{name}", f"{name}: found", snip, url, {"exists": True, "code": code}))
+                details = profile_details(r.text or '', name, u_input, url)
+                if details:
+                    title,snip = details
+                    if original_input != u_input: snip = 'Candidate handle formed by removing spaces. ' + snip
+                    hits.append(OSINTHit(name,title,snip,url,{'kind':'candidate','exists':None,'code':code,'matched_handle':u_input,'derived_handle':original_input!=u_input,'entity_type':'url','entity_value':url,'source_url':url,'identity_verified':False}))
                     positives += 1
                 else:
                     hits.append(_mk_negative(name, url, "page loaded but pattern not found", code))
@@ -329,9 +352,10 @@ def scrape_username_pack(sess: requests.Session, q: OSINTQuery) -> List[OSINTHit
                 # follow redirect with GET
                 r2 = _fetch(sess, url)
                 body = (r2.text or "").lower()
-                ok = r2.status_code < 400 and (not must_contain or re.search(verify_re, body, flags=re.I))
-                if ok:
-                    hits.append(OSINTHit(f"{name}", f"{name}: found", re.sub(r"\s+"," ",body)[:220], url, {"exists": True, "code": r2.status_code}))
+                details = profile_details(r2.text or '', name, u_input, url) if r2.status_code==200 else None
+                if details:
+                    title,snippet=details
+                    hits.append(OSINTHit(name,title,snippet,url,{'exists':None,'kind':'candidate','code':r2.status_code,'source_url':url,'matched_handle':u_input,'identity_verified':False}))
                     positives += 1
                 else:
                     hits.append(_mk_negative(name, url, "redirect but no profile", r2.status_code))
@@ -342,17 +366,14 @@ def scrape_username_pack(sess: requests.Session, q: OSINTQuery) -> List[OSINTHit
                 hits.append(_mk_negative(name, url, "request failed", code))
         except Exception as e:
             log.debug(f"Username pack fail {name} {url_fn(u_input)}: {e}")
-            hits.append(_mk_negative(name, url_fn(u_input), "error", None))
+            hits.append(_mk_negative(name, url_fn(quote(_norm_user_for(name, u_input), safe="")), "error", None))
 
-        # keep it snappy; stop after a handful of positives
-        if positives >= 8:
-            break
 
     if positives:
-        summary = f"{positives} service(s) matched for @{u_input}"
-        hits.insert(0, OSINTHit("Username Pack (direct)", summary, "; ".join(h.site for h in hits if h.raw.get("exists"))[:300], "#", {"exists": True, "count": positives}))
+        summary = f"{positives} possible profile(s) for @{u_input} — review individually"
+        hits.insert(0, OSINTHit("Username Pack (direct)", summary, "; ".join(h.site for h in hits if h.raw.get("kind") == "candidate")[:300], "", {"kind": "summary", "count": positives}))
     else:
-        hits.insert(0, OSINTHit("Username Pack (direct)", f"No matches for @{u_input}", "Checked major platforms", "#", {"exists": False}))
+        hits.insert(0, OSINTHit("Username Pack (direct)", f"No confirmed matches for @{u_input}", "Review individual source statuses; blocked or failed requests do not establish absence.", "", {"kind": "summary"}))
     return hits
 
 # ---------- OSINT sites from your tabs ----------
@@ -365,7 +386,9 @@ def scrape_hibp(sess: requests.Session, q: OSINTQuery) -> List[OSINTHit]:
     api = os.environ.get("HIBP_API_KEY", "").strip()
     acct = (q.email or q.username or "").strip()
     if not api or not acct:
-        return []
+        return [OSINTHit("HaveIBeenPwned", "API key or email required",
+                        "Set HIBP_API_KEY and enter an email, or use the provider's website manually.",
+                        "https://haveibeenpwned.com/", {"kind": "needs_input", "fallback": "guide"})]
     time.sleep(1.7)
     url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{quote_plus(acct)}?truncateResponse=true"
     try:
@@ -375,18 +398,16 @@ def scrape_hibp(sess: requests.Session, q: OSINTQuery) -> List[OSINTHit]:
             "Accept": "application/json"
         }, timeout=DEFAULT_TIMEOUT)
         if r.status_code == 404:
-            log.debug("HaveIBeenPwned: 0 hits (404)")
-            return []
+            return [OSINTHit("HaveIBeenPwned", "No breach record returned", "The API returned no breach record for this query.", "https://haveibeenpwned.com/", {"kind": "not_found", "code": 404})]
         if r.status_code >= 400:
-            log.debug(f"HaveIBeenPwned error {r.status_code}")
-            return []
+            return [OSINTHit("HaveIBeenPwned", "API unavailable", f"HTTP {r.status_code}; check your API access or retry later.", "https://haveibeenpwned.com/", {"kind": "manual", "code": r.status_code})]
         breaches = r.json() if r.text.strip() else []
         hits = []
         for b in breaches[:10]:
             name = b.get("Name") or "Breach"
             dom = b.get("Domain") or "haveibeenpwned.com"
             url_b = f"https://haveibeenpwned.com/account/{quote_plus(acct)}"
-            hits.append(OSINTHit("HaveIBeenPwned", f"HIBP: {name}", f"Domain: {dom}", url_b, {"exists": True}))
+            hits.append(OSINTHit("HaveIBeenPwned", f"HIBP: {name}", f"Domain: {dom}", url_b, {"kind": "record", "endpoint": url}))
         return hits
     except Exception as e:
         log.debug(f"HIBP failed: {e}")
@@ -488,7 +509,7 @@ def scrape_fastpeoplesearch(sess: requests.Session, q: OSINTQuery) -> List[OSINT
     base = "FastPeopleSearch"
     probes = []
     if q.first or q.last or q.city or q.state:
-        name_slug = quote_plus((q.first + " " + q.last).strip()).replace("%20", "-")
+        name_slug = quote("-".join((q.first + " " + q.last).split()), safe="")
         area = quote_plus((q.city or q.state or "").strip())
         probes.append(f"https://www.fastpeoplesearch.com/name/{name_slug}/{area}")
     if q.address1:
@@ -646,7 +667,7 @@ def run_scraper(sess: requests.Session, site: str, q: OSINTQuery) -> List[OSINTH
     except Exception as e:
         # Don’t explode the UI; log context so we can tune selectors later
         log.exception(f"{site}: unexpected error — {e}")
-        return []
+        raise
 
 def get_session_for_tests() -> requests.Session:
     """Tiny helper for quick REPL tests."""

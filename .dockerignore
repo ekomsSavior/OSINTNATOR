@@ -1,0 +1,9 @@
+**
+!requirements.txt
+!requirements-web.txt
+!*.py
+!web/
+!web/**
+!Dockerfile.web
+!data/
+!data/us_property_directory.json

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>OSINTNATOR | Church of Malware</title>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#results">Skip to results</a>
+  <header class="masthead">
+    <a href="https://churchofmalware.org" class="church">CHURCH OF MALWARE <span>FREE KNOWLEDGE. SHARED CODE.</span></a>
+    <span class="edition">PUBLIC RESEARCH / WEB PREVIEW</span>
+  </header>
+  <main>
+    <div class="intro"><div><p class="eyebrow">THE RESEARCH WORKBENCH</p><h1>OSINTNATOR<span class="period">.</span></h1><p>Start with what you know. Follow what the sources return.</p></div><div class="availability"><span class="dot"></span> Free public-source research<span>No account. No paid data providers.</span></div></div>
+    <div class="workspace">
+      <aside class="query-panel" aria-labelledby="query-title">
+        <form id="search-form" autocomplete="off">
+          <div class="panel-title"><h2 id="query-title">Search details</h2><span class="mono">01</span></div>
+          <p class="muted compact">Every filled identifier gets its own lookup. City, state and ZIP narrow name and address searches.</p>
+          <fieldset id="inputs"><legend class="sr-only">Known details</legend>
+            <div class="pair"><label>First name<input name="first" maxlength="254" placeholder="First name"></label><label>Last name<input name="last" maxlength="254" placeholder="Last name"></label></div>
+            <label>Username<input name="username" maxlength="254" placeholder="Handle or profile name" spellcheck="false"></label>
+            <label>Email<input name="email" type="email" maxlength="254" placeholder="name@example.org" spellcheck="false" autocapitalize="none"></label>
+            <label>Phone<input name="phone" type="tel" maxlength="40" placeholder="Include country code when possible"></label>
+            <label>Street address<input name="address1" maxlength="254" placeholder="Street number and name"></label>
+            <div class="location"><label>City<input name="city" maxlength="100" placeholder="City"></label><label>State<input name="state" maxlength="100" placeholder="State"></label><label>ZIP<input name="zip" maxlength="20" placeholder="ZIP"></label></div>
+            <label>Domain / website<input name="domain" maxlength="254" placeholder="example.org" spellcheck="false" autocapitalize="none"></label>
+          </fieldset>
+          <details id="sources-box" class="source-box"><summary>Sources <span id="source-count">Loading collectors</span></summary>
+            <p id="catalog-summary" class="muted compact"></p>
+            <label>Find a source<input type="search" id="source-filter" placeholder="Property, obituary, phone…"></label>
+            <div class="source-actions"><button type="button" id="relevant">Select relevant</button><button type="button" id="all-sources">Select all</button><button type="button" id="no-sources">Clear</button></div>
+            <div id="sources"></div>
+          </details>
+          <div class="pair settings"><label>Search engine<select id="engine" aria-label="Search engine"></select></label><label>Per lookup<select id="budget" aria-label="Lookup budget"><option value="10">10 seconds</option><option value="20" selected>20 seconds</option><option value="30">30 seconds</option></select></label></div>
+          <label class="check"><input id="fallback" type="checkbox" checked><span>Try other engines if unavailable</span></label>
+          <p class="notice">Search only for a legitimate purpose. Inputs go to selected public sources. Results remain in this session for <span id="retention">30</span> minutes after a run; you can delete them sooner.</p>
+          <p class="notice" id="search-limit">Five searches per 10 minutes per visitor IP. Larger selections take longer; each lookup keeps its selected time budget.</p>
+          <button type="submit" id="run" class="primary" disabled>Run all selected <span aria-hidden="true">→</span></button>
+          <p id="error" class="error" role="alert" hidden></p>
+        </form>
+      </aside>
+      <section class="research" id="results" aria-labelledby="results-title" tabindex="-1">
+        <div class="results-head"><div><p class="eyebrow">LIVE COLLECTION</p><h2 id="results-title">Research results</h2></div><div class="run-actions"><button id="cancel" hidden>Stop search</button><button id="forget" hidden>Delete session results</button></div></div>
+        <div class="run-status"><span id="status" role="status" aria-live="polite">Ready when you are</span><span id="progress-text" class="mono"></span></div>
+        <progress id="progress" max="1" value="0" aria-label="Completed lookup tasks" hidden></progress>
+        <div id="coverage" class="coverage" aria-label="Coverage by input"></div>
+        <div id="field-status" aria-live="polite"></div>
+        <details id="lookup-progress" hidden><summary>Lookup progress</summary><div id="lookup-tasks"></div></details>
+        <div id="result-tools" hidden>
+          <div class="filters"><label class="sr-only" for="filter">Filter results</label><input id="filter" type="search" placeholder="Filter findings, sources or text"><label class="sr-only" for="view">Result type</label><select id="view"><option value="findings">Findings</option><option value="shared">Shared evidence</option><option value="portals">Source portals</option><option value="issues">Source status</option><option value="all">Everything</option></select><label class="sr-only" for="field">Input field</label><select id="field"><option value="all">All inputs</option></select></div>
+          <div class="result-meta"><span id="result-count"></span><details class="export"><summary>Download report</summary><div><a id="json-download">JSON</a><a id="html-download">HTML</a><a id="graphml-download">GraphML</a></div></details></div>
+        </div>
+        <div id="cards"><div class="empty"><div class="empty-mark" aria-hidden="true">[ / ]</div><h3>A starting point becomes a trail.</h3><p>Enter a name, handle, contact detail, address or website. Select your sources, then run the search.</p><div class="empty-grid"><div><strong>Collect</strong><span>Independent lookups for each input.</span></div><div><strong>Compare</strong><span>Review what matches and what does not.</span></div><div><strong>Keep the source</strong><span>Export findings with their provenance.</span></div></div><p class="footnote">A public mention is evidence to review. It does not establish identity or ownership.</p></div></div>
+        <details class="property-browser" id="property-browser"><summary>US property, assessor &amp; tax directory <span>All 50 states + DC</span></summary>
+          <p class="muted compact">Browse county and municipal assessor, appraiser, tax collector, treasurer and recorder directories. Enter an address above and select <strong>US Assessor &amp; Tax Directory</strong> to resolve the jurisdiction and collect its office links.</p>
+          <div class="pair"><label>Property state<select id="property-state"><option value="">Choose a state</option></select></label><label>County / municipality<select id="property-county" disabled><option value="">Choose a jurisdiction</option></select></label></div>
+          <div id="property-links" class="card-bottom"></div><p id="property-directory-note" class="muted compact">Loading the nationwide directory…</p>
+          <p class="muted compact">Automatic parcel retrieval uses public GIS services where supported. Some offices require their interactive form, registration or a records request. Directory entries are research paths; they are not counted as property findings.</p>
+        </details>
+        <details class="help"><summary>What can this search retrieve?</summary><p>The full desktop source catalog is available under Sources, grouped by category. Collectors retrieve data; public-page checks try the provider's lookup; interactive portals open the source's own tools. Select relevant chooses collectors and public-page checks for your filled inputs. Select all includes portals too.</p><p>Search public profiles, LinkedIn profiles by first and last name, web mentions, email-linked profiles and commits, phone mentions, obituary notices, DNS and registration data, address geography, and matching parcel records. Property and tax-office directories cover all 50 states and DC. Automatic parcel coverage depends on the public service; dataset dates and unsupported lookups appear in results.</p><p>LinkedIn Name Search retrieves indexed public profile links and descriptions, with a separate city/state search when supplied. Private or unindexed profiles may be missed. LinkedIn name matches remain candidates; no LinkedIn account is required here.</p><p>Obituary names remain candidates until dates, location and identity are corroborated. Email and phone lookups do not guarantee an owner match. A blocked source is reported as unavailable. Results expire after 30 minutes; export before then. External sources have their own access and privacy policies.</p></details>
+      </section>
+    </div>
+    <footer><span>OSINTNATOR / CHURCH OF MALWARE</span><span>Public sources. Clear provenance. Free to use.</span></footer>
+  </main>
+</body>
+</html>
